@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from meizu_core import LivePhotoFixTool, check_photo_type
+from flyme_livephoto_fix_core import LivePhotoFixTool, check_photo_type
 
 
 @dataclass

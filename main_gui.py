@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from gui_logic import PhotoItem, export_items, fix_items, format_size
-from meizu_core import LivePhotoFixTool, check_photo_type
+from main_gui_logic import PhotoItem, export_items, fix_items, format_size
+from flyme_livephoto_fix_core import LivePhotoFixTool, check_photo_type
 from qframelesswindow import FramelessMainWindow, StandardTitleBar
 
 from PyQt6.QtCore import QEvent, QObject, QThread, Qt, pyqtSignal
