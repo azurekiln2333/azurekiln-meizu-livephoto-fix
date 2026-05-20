@@ -111,6 +111,7 @@ class MainWindow(FramelessMainWindow):
         self.setWindowTitle(f"Meizu LivePhoto Fix - Fluent {edition} ({QT_BINDING})")
         self.resize(1280, 860)
         self._acrylic_applied = False
+        self._title_bar_height = max(36, getattr(self.titleBar, "height", lambda: 36)())
 
         self.items: dict[str, PhotoItem] = {}
 
@@ -123,7 +124,7 @@ class MainWindow(FramelessMainWindow):
         root = QWidget(self)
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(20, 18, 20, 18)
+        outer.setContentsMargins(20, self._title_bar_height + 14, 20, 18)
         outer.setSpacing(12)
 
         header_card = CardWidget(self)
@@ -275,9 +276,18 @@ class MainWindow(FramelessMainWindow):
         outer.addWidget(control_card)
         outer.addWidget(table_card, 1)
         outer.addWidget(foot_card)
+        self._sync_title_bar()
+
+    def _sync_title_bar(self):
+        if not hasattr(self, "titleBar"):
+            return
+        self.titleBar.move(0, 0)
+        self.titleBar.resize(self.width(), self._title_bar_height)
+        self.titleBar.raise_()
 
     def showEvent(self, e):
         super().showEvent(e)
+        self._sync_title_bar()
         if self._acrylic_applied:
             return
         if sys.platform == "win32" and hasattr(self, "windowEffect"):
@@ -286,6 +296,10 @@ class MainWindow(FramelessMainWindow):
             except Exception:
                 pass
         self._acrylic_applied = True
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._sync_title_bar()
 
     def _notify(self, title: str, content: str, is_error: bool = False):
         if is_error:
