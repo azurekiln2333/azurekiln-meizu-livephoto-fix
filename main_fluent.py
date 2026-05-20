@@ -4,11 +4,11 @@ import sys
 import importlib
 from pathlib import Path
 
-from gui_logic import PhotoItem, export_items, fix_items, scan_photo_items
-from meizu_core import LivePhotoFixTool
+from gui_logic import PhotoItem, export_items, fix_items, scan_photo_items, format_size
+from meizu_core import LivePhotoFixTool, check_photo_type
 from qframelesswindow import FramelessMainWindow, StandardTitleBar
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
@@ -107,8 +107,7 @@ def _pick_icon(*names: str):
 class MainWindow(FramelessMainWindow):
     def __init__(self):
         super().__init__()
-        edition = "Pro" if IS_PRO else "Base"
-        self.setWindowTitle(f"Meizu LivePhoto Fix - Fluent {edition} ({QT_BINDING})")
+        self.setWindowTitle(f"Meizu LivePhoto Fix")
         self.resize(1280, 860)
         self._title_bar_height = 36
         self._set_blue_title_bar()
@@ -140,15 +139,9 @@ class MainWindow(FramelessMainWindow):
         subtitle = BodyLabel("扫描、筛选并批量修复 LivePhoto，支持复制或移动导出", self)
         subtitle.setStyleSheet("color: #667085;")
 
-        version = BodyLabel(
-            f"Fluent 版本: {edition}  |  Qt: {QT_BINDING}  |  模式: Light",
-            self,
-        )
-        version.setStyleSheet("color: #98a2b3;")
 
         header_layout.addWidget(title)
         header_layout.addWidget(subtitle)
-        header_layout.addWidget(version)
 
         path_card = CardWidget(self)
         path_layout = QVBoxLayout(path_card)
@@ -180,10 +173,10 @@ class MainWindow(FramelessMainWindow):
         path_layout.addLayout(row1)
         path_layout.addLayout(row2)
 
-        control_card = CardWidget(self)
-        control_layout = QVBoxLayout(control_card)
-        control_layout.setContentsMargins(16, 14, 16, 14)
-        control_layout.setSpacing(10)
+        option_card = CardWidget(self)
+        option_layout = QVBoxLayout(option_card)
+        option_layout.setContentsMargins(16, 14, 16, 14)
+        option_layout.setSpacing(10)
 
         row3 = QHBoxLayout()
         row3.setSpacing(12)
@@ -196,6 +189,12 @@ class MainWindow(FramelessMainWindow):
         row3.addStretch(1)
         row3.addWidget(self.skip_radio)
         row3.addWidget(self.overwrite_radio)
+        option_layout.addLayout(row3)
+
+        action_card = CardWidget(self)
+        action_layout = QVBoxLayout(action_card)
+        action_layout.setContentsMargins(16, 12, 16, 12)
+        action_layout.setSpacing(8)
 
         row4 = QHBoxLayout()
         row4.setSpacing(8)
@@ -227,14 +226,15 @@ class MainWindow(FramelessMainWindow):
         row4.addWidget(btn_all)
         row4.addWidget(btn_invert)
         row4.addStretch(1)
-
-        control_layout.addLayout(row3)
-        control_layout.addLayout(row4)
+        action_layout.addLayout(row4)
 
         table_card = CardWidget(self)
         table_layout = QVBoxLayout(table_card)
         table_layout.setContentsMargins(10, 10, 10, 10)
         table_layout.setSpacing(8)
+
+        self.drop_hint = BodyLabel("支持拖拽 JPG/JPEG 文件或文件夹到列表区域", self)
+        self.drop_hint.setStyleSheet("color: #6b7280; padding: 4px 6px;")
 
         self.table = TableWidget(self)
         self.table.setColumnCount(6)
@@ -246,6 +246,9 @@ class MainWindow(FramelessMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setFrameShape(QFrame.Shape.NoFrame)
+        self.table.setAcceptDrops(True)
+        self.table.viewport().setAcceptDrops(True)
+        self.table.viewport().installEventFilter(self)
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -257,6 +260,7 @@ class MainWindow(FramelessMainWindow):
         header.setMinimumSectionSize(56)
         self.table.verticalHeader().setDefaultSectionSize(36)
 
+        table_layout.addWidget(self.drop_hint)
         table_layout.addWidget(self.table)
 
         foot_card = CardWidget(self)
@@ -273,8 +277,9 @@ class MainWindow(FramelessMainWindow):
 
         outer.addWidget(header_card)
         outer.addWidget(path_card)
-        outer.addWidget(control_card)
+        outer.addWidget(option_card)
         outer.addWidget(table_card, 1)
+        outer.addWidget(action_card)
         outer.addWidget(foot_card)
         self._sync_title_bar()
 
@@ -293,12 +298,9 @@ class MainWindow(FramelessMainWindow):
             """
         )
         for btn in (self.titleBar.minBtn, self.titleBar.maxBtn, self.titleBar.closeBtn):
-            btn.setNormalColor("#FFFFFF")
-            btn.setHoverColor("#FFFFFF")
-            btn.setPressedColor("#FFFFFF")
-            btn.setNormalBackgroundColor("#1677FF")
-            btn.setHoverBackgroundColor("#3A8DFF")
-            btn.setPressedBackgroundColor("#0B62E6")
+            btn.setNormalBackgroundColor("#00000000")
+            btn.setHoverBackgroundColor("#33FFFFFF")
+            btn.setPressedBackgroundColor("#55FFFFFF")
 
     def _sync_title_bar(self):
         if not hasattr(self, "titleBar"):
@@ -368,18 +370,67 @@ class MainWindow(FramelessMainWindow):
                 self.table.setItem(row, 5, QTableWidgetItem(status))
                 return
 
-    def scan(self):
-        src = self.input_edit.text().strip()
-        if not src:
-            self.status.setText("请先选择源目录")
-            self._notify("缺少源目录", "请先选择源目录再扫描", is_error=True)
-            return
+    def eventFilter(self, obj, event):
+        if obj is self.table.viewport():
+            if event.type() == QEvent.Type.DragEnter:
+                if event.mimeData().hasUrls():
+                    event.acceptProposedAction()
+                    return True
+            elif event.type() == QEvent.Type.DragMove:
+                if event.mimeData().hasUrls():
+                    event.acceptProposedAction()
+                    return True
+            elif event.type() == QEvent.Type.Drop:
+                urls = event.mimeData().urls()
+                paths = [Path(url.toLocalFile()) for url in urls if url.isLocalFile()]
+                if paths:
+                    self._add_dropped_paths(paths)
+                    event.acceptProposedAction()
+                    return True
+        return super().eventFilter(obj, event)
 
-        items = scan_photo_items(Path(src), include_subdirs=self.subdirs_cb.isChecked())
-        self.items = {x.item_id: x for x in items}
+    def _iter_drop_jpg_files(self, paths: list[Path]) -> list[Path]:
+        files: set[Path] = set()
+        for p in paths:
+            if p.is_dir():
+                files.update(scan_path for scan_path in p.rglob("*") if scan_path.suffix.lower() in {".jpg", ".jpeg"})
+            elif p.is_file() and p.suffix.lower() in {".jpg", ".jpeg"}:
+                files.add(p)
+        return sorted(files, key=lambda x: str(x))
 
-        self.table.setRowCount(len(items))
-        for row, item in enumerate(items):
+    def _photo_item_from_path(self, jpg_path: Path, idx: int) -> PhotoItem:
+        try:
+            size_str = format_size(jpg_path.stat().st_size)
+            is_meizu, is_live, is_fixed = check_photo_type(jpg_path)
+        except Exception:
+            size_str, is_meizu, is_live, is_fixed = "?", False, False, False
+
+        needs_process = is_live and not is_fixed
+        if needs_process:
+            status = "等待处理"
+        elif is_fixed:
+            status = "已修复兼容"
+        elif not is_meizu:
+            status = "非魅族设备照片"
+        else:
+            status = "魅族普通静态图"
+
+        return PhotoItem(
+            item_id=f"drop_{idx}",
+            jpg_path=jpg_path,
+            rel_path=Path(jpg_path.name),
+            size_str=size_str,
+            is_meizu=is_meizu,
+            is_live=is_live,
+            is_fixed=is_fixed,
+            needs_process=needs_process,
+            status=status,
+        )
+
+    def _refresh_table(self):
+        rows = sorted(self.items.values(), key=lambda x: str(x.jpg_path))
+        self.table.setRowCount(len(rows))
+        for row, item in enumerate(rows):
             cb = CheckBox(self)
             cb.setChecked(item.needs_process)
             cb.setProperty("item_id", item.item_id)
@@ -390,6 +441,46 @@ class MainWindow(FramelessMainWindow):
             self.table.setItem(row, 3, QTableWidgetItem("是" if item.is_meizu else "否"))
             self.table.setItem(row, 4, QTableWidgetItem("是" if item.is_live else "否"))
             self.table.setItem(row, 5, QTableWidgetItem(item.status))
+
+    def _add_dropped_paths(self, paths: list[Path]):
+        jpg_files = self._iter_drop_jpg_files(paths)
+        if not jpg_files:
+            self._notify("无可添加文件", "仅支持拖入 JPG/JPEG 文件或文件夹", is_error=True)
+            return
+
+        existed = {item.jpg_path.resolve() for item in self.items.values()}
+        added = 0
+        base_idx = len(self.items)
+        for jpg_path in jpg_files:
+            try:
+                resolved = jpg_path.resolve()
+            except Exception:
+                resolved = jpg_path
+            if resolved in existed:
+                continue
+            item = self._photo_item_from_path(jpg_path, base_idx + added)
+            self.items[item.item_id] = item
+            existed.add(resolved)
+            added += 1
+
+        if added == 0:
+            self._notify("未新增", "拖入文件已全部存在于列表中", is_error=True)
+            return
+
+        self._refresh_table()
+        self.status.setText(f"已新增 {added} 个文件，当前共 {len(self.items)} 项")
+        self._notify("拖拽添加完成", f"新增 {added} 个文件")
+
+    def scan(self):
+        src = self.input_edit.text().strip()
+        if not src:
+            self.status.setText("请先选择源目录")
+            self._notify("缺少源目录", "请先选择源目录再扫描", is_error=True)
+            return
+
+        items = scan_photo_items(Path(src), include_subdirs=self.subdirs_cb.isChecked())
+        self.items = {x.item_id: x for x in items}
+        self._refresh_table()
 
         self.progress.setValue(0)
         self.status.setText(f"扫描完成: {len(items)} 张")
