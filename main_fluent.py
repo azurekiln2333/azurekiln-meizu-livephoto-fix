@@ -4,14 +4,14 @@ import sys
 import importlib
 import subprocess
 import os
-from collections import deque
 from pathlib import Path
+from uuid import uuid4
 
-from gui_logic import PhotoItem, export_items, fix_items, scan_photo_items, format_size
+from gui_logic import PhotoItem, export_items, fix_items, format_size
 from meizu_core import LivePhotoFixTool, check_photo_type
 from qframelesswindow import FramelessMainWindow, StandardTitleBar
 
-from PyQt6.QtCore import QEvent, QTimer, Qt
+from PyQt6.QtCore import QEvent, QObject, QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
@@ -35,6 +35,98 @@ if sys.platform == "win32":
     import win32con  # type: ignore
     import win32gui  # type: ignore
     from win32com.shell import shell, shellcon  # type: ignore
+
+
+class DropScanWorker(QObject):
+    batch_ready = pyqtSignal(object)
+    progress = pyqtSignal(int, int, str)
+    finished = pyqtSignal(int, int)
+
+    def __init__(self, paths: list[Path], existing: set[Path]):
+        super().__init__()
+        self.paths = paths
+        self.existing = existing
+
+    def _iter_jpg_files(self) -> list[Path]:
+        files: list[Path] = []
+        for p in self.paths:
+            if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg"}:
+                files.append(p)
+                continue
+            if not p.is_dir():
+                continue
+            try:
+                for root, _dirs, names in os.walk(p):
+                    base = Path(root)
+                    for name in names:
+                        if name.lower().endswith((".jpg", ".jpeg")):
+                            files.append(base / name)
+            except Exception:
+                continue
+        return sorted(set(files), key=lambda x: str(x))
+
+    def _build_item(self, jpg_path: Path) -> PhotoItem:
+        try:
+            size_str = format_size(jpg_path.stat().st_size)
+            is_meizu, is_live, is_fixed = check_photo_type(jpg_path)
+        except Exception:
+            size_str, is_meizu, is_live, is_fixed = "?", False, False, False
+
+        needs_process = is_live and not is_fixed
+        if needs_process:
+            status = "等待处理"
+        elif is_fixed:
+            status = "已修复兼容"
+        elif not is_meizu:
+            status = "非魅族设备照片"
+        else:
+            status = "魅族普通静态图"
+
+        return PhotoItem(
+            item_id=f"drop_{uuid4().hex}",
+            jpg_path=jpg_path,
+            rel_path=Path(jpg_path.name),
+            size_str=size_str,
+            is_meizu=is_meizu,
+            is_live=is_live,
+            is_fixed=is_fixed,
+            needs_process=needs_process,
+            status=status,
+        )
+
+    def run(self):
+        all_files = self._iter_jpg_files()
+        candidates: list[Path] = []
+        seen = set()
+        for p in all_files:
+            try:
+                rp = p.resolve()
+            except Exception:
+                rp = p
+            if rp in self.existing or rp in seen:
+                continue
+            seen.add(rp)
+            candidates.append(p)
+
+        total = len(candidates)
+        if total == 0:
+            self.finished.emit(0, 0)
+            return
+
+        batch: list[PhotoItem] = []
+        added = 0
+        for idx, p in enumerate(candidates, start=1):
+            batch.append(self._build_item(p))
+            added += 1
+            if len(batch) >= 12:
+                self.batch_ready.emit(batch)
+                batch = []
+            if idx % 8 == 0 or idx == total:
+                self.progress.emit(idx, total, "analyzing")
+
+        if batch:
+            self.batch_ready.emit(batch)
+        self.finished.emit(added, total)
 
 
 def _import_fluent():
@@ -123,6 +215,8 @@ class MainWindow(FramelessMainWindow):
         self._set_blue_title_bar()
 
         self.items: dict[str, PhotoItem] = {}
+        self._drop_thread: QThread | None = None
+        self._drop_worker: DropScanWorker | None = None
 
         try:
             self.engine = LivePhotoFixTool()
@@ -158,29 +252,17 @@ class MainWindow(FramelessMainWindow):
         path_layout.setContentsMargins(16, 14, 16, 14)
         path_layout.setSpacing(10)
 
-        row1 = QHBoxLayout()
-        row1.setSpacing(10)
-        self.input_edit = LineEdit(self)
-        self.input_edit.setReadOnly(True)
-        self.input_edit.setPlaceholderText("请选择源目录")
-        btn_input = PushButton("选择源目录", self)
-        btn_input.clicked.connect(self.choose_input)
-        row1.addWidget(BodyLabel("源目录", self))
-        row1.addWidget(self.input_edit, 1)
-        row1.addWidget(btn_input)
-
         row2 = QHBoxLayout()
         row2.setSpacing(10)
         self.output_edit = LineEdit(self)
         self.output_edit.setReadOnly(True)
-        self.output_edit.setPlaceholderText("请选择输出目录")
+        self.output_edit.setPlaceholderText("输出目录（默认图片目录）")
         btn_output = PushButton("选择输出目录", self)
         btn_output.clicked.connect(self.choose_output)
         row2.addWidget(BodyLabel("输出目录", self))
         row2.addWidget(self.output_edit, 1)
         row2.addWidget(btn_output)
 
-        path_layout.addLayout(row1)
         path_layout.addLayout(row2)
 
         option_card = CardWidget(self)
@@ -190,12 +272,9 @@ class MainWindow(FramelessMainWindow):
 
         row3 = QHBoxLayout()
         row3.setSpacing(12)
-        self.subdirs_cb = CheckBox("扫描子目录", self)
-        self.subdirs_cb.setChecked(True)
         self.skip_radio = RadioButton("目标已存在时跳过", self)
         self.overwrite_radio = RadioButton("目标已存在时覆盖", self)
         self.skip_radio.setChecked(True)
-        row3.addWidget(self.subdirs_cb)
         row3.addStretch(1)
         row3.addWidget(self.skip_radio)
         row3.addWidget(self.overwrite_radio)
@@ -208,9 +287,6 @@ class MainWindow(FramelessMainWindow):
 
         row4 = QHBoxLayout()
         row4.setSpacing(8)
-        btn_scan = PushButton("扫描", self)
-        btn_scan.clicked.connect(self.scan)
-
         btn_fix = PrimaryPushButton("修复勾选项", self)
         btn_fix.clicked.connect(self.fix_checked)
 
@@ -228,14 +304,17 @@ class MainWindow(FramelessMainWindow):
         btn_invert.setToolTip("反选")
         btn_invert.clicked.connect(self.invert_rows)
 
+        btn_clear = PushButton("清空列表", self)
+        btn_clear.clicked.connect(self.clear_list)
+
         row4.addStretch(1)
-        row4.addWidget(btn_scan)
         row4.addWidget(btn_fix)
         row4.addWidget(btn_copy)
         row4.addWidget(btn_move)
         row4.addSpacing(8)
         row4.addWidget(btn_all)
         row4.addWidget(btn_invert)
+        row4.addWidget(btn_clear)
         action_layout.addLayout(row4)
 
         table_card = CardWidget(self)
@@ -295,6 +374,7 @@ class MainWindow(FramelessMainWindow):
         outer.addWidget(table_card, 1)
         outer.addWidget(action_card)
         outer.addWidget(foot_card)
+        self._init_default_output_dir()
         self._sync_title_bar()
 
     def _set_blue_title_bar(self):
@@ -354,17 +434,19 @@ class MainWindow(FramelessMainWindow):
             parent=self,
         )
 
-    def choose_input(self):
-        path = QFileDialog.getExistingDirectory(self, "选择源目录")
-        if not path:
-            return
-        self.input_edit.setText(path)
-        self.output_edit.setText(str(Path(path) / "Fixed_MotionPhotos"))
-        self.scan()
+    def _init_default_output_dir(self):
+        base = Path.home() / "Pictures" / "FlymeLivePhotoFix"
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        self.output_edit.setText(str(base))
+        self.status.setText("等待拖拽文件到列表")
 
     def choose_output(self):
         path = QFileDialog.getExistingDirectory(self, "选择输出目录")
         if path:
+            Path(path).mkdir(parents=True, exist_ok=True)
             self.output_edit.setText(path)
 
     def _selected_items(self) -> list[PhotoItem]:
@@ -488,6 +570,7 @@ class MainWindow(FramelessMainWindow):
         item = self._item_from_row(row)
         if item is None:
             return
+        self.table.setCurrentCell(row, 1)
 
         file_path = item.jpg_path
         global_pos = self.table.viewport().mapToGlobal(pos)
@@ -528,55 +611,10 @@ class MainWindow(FramelessMainWindow):
                 urls = event.mimeData().urls()
                 paths = [Path(url.toLocalFile()) for url in urls if url.isLocalFile()]
                 if paths:
-                    self._enqueue_dropped_paths(paths)
+                    self._start_drop_worker(paths)
                     event.acceptProposedAction()
                     return True
         return super().eventFilter(obj, event)
-
-    def _iter_drop_jpg_files(self, paths: list[Path]) -> list[Path]:
-        files: list[Path] = []
-        for p in paths:
-            if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg"}:
-                files.append(p)
-            elif p.is_dir():
-                try:
-                    for root, _dirs, names in os.walk(p):
-                        base = Path(root)
-                        for name in names:
-                            if name.lower().endswith((".jpg", ".jpeg")):
-                                files.append(base / name)
-                except Exception:
-                    continue
-        return sorted(set(files), key=lambda x: str(x))
-
-    def _photo_item_from_path(self, jpg_path: Path, idx: int) -> PhotoItem:
-        try:
-            size_str = format_size(jpg_path.stat().st_size)
-            is_meizu, is_live, is_fixed = check_photo_type(jpg_path)
-        except Exception:
-            size_str, is_meizu, is_live, is_fixed = "?", False, False, False
-
-        needs_process = is_live and not is_fixed
-        if needs_process:
-            status = "等待处理"
-        elif is_fixed:
-            status = "已修复兼容"
-        elif not is_meizu:
-            status = "非魅族设备照片"
-        else:
-            status = "魅族普通静态图"
-
-        return PhotoItem(
-            item_id=f"drop_{idx}",
-            jpg_path=jpg_path,
-            rel_path=Path(jpg_path.name),
-            size_str=size_str,
-            is_meizu=is_meizu,
-            is_live=is_live,
-            is_fixed=is_fixed,
-            needs_process=needs_process,
-            status=status,
-        )
 
     def _refresh_table(self):
         rows = sorted(self.items.values(), key=lambda x: str(x.jpg_path))
@@ -593,100 +631,62 @@ class MainWindow(FramelessMainWindow):
             self.table.setItem(row, 4, QTableWidgetItem("是" if item.is_live else "否"))
             self.table.setItem(row, 5, QTableWidgetItem(item.status))
 
-    def _enqueue_dropped_paths(self, paths: list[Path]):
-        jpg_files = self._iter_drop_jpg_files(paths)
-        if not jpg_files:
-            self._notify("无可添加文件", "仅支持拖入 JPG/JPEG 文件或文件夹", is_error=True)
-            return
-
-        if not hasattr(self, "_drop_queue"):
-            self._drop_queue = deque()
-            self._drop_total = 0
-            self._drop_added = 0
-            self._drop_seen: set[Path] = set()
-            self._drop_existing: set[Path] = set()
-
+    def _current_existing_paths(self) -> set[Path]:
         existed: set[Path] = set()
-        for x in self.items.values():
+        for item in self.items.values():
             try:
-                existed.add(x.jpg_path.resolve())
+                existed.add(item.jpg_path.resolve())
             except Exception:
-                existed.add(x.jpg_path)
-        self._drop_existing = existed
+                existed.add(item.jpg_path)
+        return existed
 
-        enqueued = 0
-        for p in jpg_files:
-            try:
-                rp = p.resolve()
-            except Exception:
-                rp = p
-            if rp in existed or rp in self._drop_seen:
-                continue
-            self._drop_seen.add(rp)
-            self._drop_queue.append((p, rp))
-            enqueued += 1
-
-        if enqueued == 0:
-            self._notify("未新增", "拖入文件已全部存在于列表中", is_error=True)
+    def _start_drop_worker(self, paths: list[Path]):
+        if self._drop_thread is not None and self._drop_thread.isRunning():
+            self._notify("正在处理", "上一批拖拽仍在处理中，请稍候", is_error=True)
             return
 
-        self._drop_total += enqueued
-        self.status.setText(f"正在添加文件 0/{self._drop_total}")
-        if not hasattr(self, "_drop_timer"):
-            self._drop_timer = QTimer(self)
-            self._drop_timer.timeout.connect(self._process_drop_batch)
-        if not self._drop_timer.isActive():
-            self._drop_timer.start(0)
+        self.status.setText("正在解析拖拽文件...")
+        self.progress.setRange(0, 0)
 
-    def _process_drop_batch(self):
-        batch_size = 20
-        if not hasattr(self, "_drop_queue") or not self._drop_queue:
-            if hasattr(self, "_drop_timer") and self._drop_timer.isActive():
-                self._drop_timer.stop()
-            total = getattr(self, "_drop_total", 0)
-            added = getattr(self, "_drop_added", 0)
-            if total > 0:
-                self.status.setText(f"已新增 {added} 个文件，当前共 {len(self.items)} 项")
-                self._notify("拖拽添加完成", f"新增 {added} / {total}")
-            self._drop_total = 0
-            self._drop_added = 0
-            self._drop_seen = set()
-            self._drop_existing = set()
-            return
+        self._drop_thread = QThread(self)
+        self._drop_worker = DropScanWorker(paths, self._current_existing_paths())
+        self._drop_worker.moveToThread(self._drop_thread)
+        self._drop_thread.started.connect(self._drop_worker.run)
+        self._drop_worker.batch_ready.connect(self._on_drop_batch_ready)
+        self._drop_worker.progress.connect(self._on_drop_progress)
+        self._drop_worker.finished.connect(self._on_drop_finished)
+        self._drop_worker.finished.connect(self._drop_thread.quit)
+        self._drop_worker.finished.connect(self._drop_worker.deleteLater)
+        self._drop_thread.finished.connect(self._drop_thread.deleteLater)
+        self._drop_thread.start()
 
-        changed = False
-        for _ in range(batch_size):
-            if not self._drop_queue:
-                break
-            jpg_path, resolved = self._drop_queue.popleft()
-            if resolved in self._drop_existing:
-                continue
-
-            idx = len(self.items)
-            item = self._photo_item_from_path(jpg_path, idx)
+    def _on_drop_batch_ready(self, batch):
+        for item in batch:
             self.items[item.item_id] = item
-            self._drop_added += 1
-            self._drop_existing.add(resolved)
-            changed = True
-
-        if changed:
-            self._refresh_table()
-        self.status.setText(f"正在添加文件 {self._drop_added}/{self._drop_total}")
-
-    def scan(self):
-        src = self.input_edit.text().strip()
-        if not src:
-            self.status.setText("请先选择源目录")
-            self._notify("缺少源目录", "请先选择源目录再扫描", is_error=True)
-            return
-
-        items = scan_photo_items(Path(src), include_subdirs=self.subdirs_cb.isChecked())
-        self.items = {x.item_id: x for x in items}
         self._refresh_table()
+        QApplication.processEvents()
 
+    def _on_drop_progress(self, done: int, total: int, _stage: str):
+        self.status.setText(f"正在添加文件 {done}/{total}")
+
+    def _on_drop_finished(self, added: int, total: int):
+        self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        self.status.setText(f"扫描完成: {len(items)} 张")
-        self._notify("扫描完成", f"共发现 {len(items)} 张图片")
+        if total == 0:
+            self.status.setText("未发现可新增 JPG/JPEG")
+            self._notify("未新增", "拖入文件已全部存在于列表中或格式不支持", is_error=True)
+        else:
+            self.status.setText(f"拖拽完成：新增 {added}/{total}，当前共 {len(self.items)} 项")
+            self._notify("拖拽添加完成", f"新增 {added}/{total}")
+        self._drop_worker = None
+        self._drop_thread = None
+
+    def clear_list(self):
+        self.items.clear()
+        self.table.setRowCount(0)
+        self.progress.setValue(0)
+        self.status.setText("列表已清空")
+        self._notify("已清空", "列表已清空，等待拖拽文件")
 
     def select_all_rows(self):
         for row in range(self.table.rowCount()):
