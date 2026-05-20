@@ -6,7 +6,7 @@ from pathlib import Path
 
 from gui_logic import PhotoItem, export_items, fix_items, scan_photo_items
 from meizu_core import LivePhotoFixTool
-from qframelesswindow import FramelessMainWindow
+from qframelesswindow import FramelessMainWindow, StandardTitleBar
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -110,8 +110,8 @@ class MainWindow(FramelessMainWindow):
         edition = "Pro" if IS_PRO else "Base"
         self.setWindowTitle(f"Meizu LivePhoto Fix - Fluent {edition} ({QT_BINDING})")
         self.resize(1280, 860)
-        self._acrylic_applied = False
-        self._title_bar_height = max(36, getattr(self.titleBar, "height", lambda: 36)())
+        self._title_bar_height = 36
+        self._set_blue_title_bar()
 
         self.items: dict[str, PhotoItem] = {}
 
@@ -124,7 +124,7 @@ class MainWindow(FramelessMainWindow):
         root = QWidget(self)
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(20, self._title_bar_height + 14, 20, 18)
+        outer.setContentsMargins(20, self._title_bar_height + 12, 20, 18)
         outer.setSpacing(12)
 
         header_card = CardWidget(self)
@@ -278,6 +278,28 @@ class MainWindow(FramelessMainWindow):
         outer.addWidget(foot_card)
         self._sync_title_bar()
 
+    def _set_blue_title_bar(self):
+        self.setTitleBar(StandardTitleBar(self))
+        self._title_bar_height = self.titleBar.height()
+        self.titleBar.setStyleSheet(
+            """
+            QWidget {
+                background: #1677FF;
+            }
+            QLabel {
+                color: #FFFFFF;
+                background: transparent;
+            }
+            """
+        )
+        for btn in (self.titleBar.minBtn, self.titleBar.maxBtn, self.titleBar.closeBtn):
+            btn.setNormalColor("#FFFFFF")
+            btn.setHoverColor("#FFFFFF")
+            btn.setPressedColor("#FFFFFF")
+            btn.setNormalBackgroundColor("#1677FF")
+            btn.setHoverBackgroundColor("#3A8DFF")
+            btn.setPressedBackgroundColor("#0B62E6")
+
     def _sync_title_bar(self):
         if not hasattr(self, "titleBar"):
             return
@@ -288,14 +310,6 @@ class MainWindow(FramelessMainWindow):
     def showEvent(self, e):
         super().showEvent(e)
         self._sync_title_bar()
-        if self._acrylic_applied:
-            return
-        if sys.platform == "win32" and hasattr(self, "windowEffect"):
-            try:
-                self.windowEffect.setAcrylicEffect(self.winId(), "F2F8FFCC")
-            except Exception:
-                pass
-        self._acrylic_applied = True
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
