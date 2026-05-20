@@ -6,43 +6,25 @@ from pathlib import Path
 
 from gui_logic import PhotoItem, export_items, fix_items, scan_photo_items
 from meizu_core import LivePhotoFixTool
+from qframelesswindow import FramelessMainWindow
 
-try:
-    from PySide6.QtCore import Qt
-    from PySide6.QtGui import QFont
-    from PySide6.QtWidgets import (
-        QApplication,
-        QAbstractItemView,
-        QFileDialog,
-        QFrame,
-        QHBoxLayout,
-        QLabel,
-        QMainWindow,
-        QMessageBox,
-        QTableWidgetItem,
-        QVBoxLayout,
-        QWidget,
-        QHeaderView,
-    )
-    QT_BINDING = "PySide6"
-except ImportError:
-    from PyQt6.QtCore import Qt  # type: ignore
-    from PyQt6.QtGui import QFont  # type: ignore
-    from PyQt6.QtWidgets import (  # type: ignore
-        QApplication,
-        QAbstractItemView,
-        QFileDialog,
-        QFrame,
-        QHBoxLayout,
-        QLabel,
-        QMainWindow,
-        QMessageBox,
-        QTableWidgetItem,
-        QVBoxLayout,
-        QWidget,
-        QHeaderView,
-    )
-    QT_BINDING = "PyQt6"
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import (
+    QApplication,
+    QAbstractItemView,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+    QHeaderView,
+)
+
+QT_BINDING = "PyQt6"
 
 
 def _import_fluent():
@@ -66,8 +48,7 @@ def _import_fluent():
     if module is None:
         raise ImportError(
             "未安装 qfluentwidgets。请安装对应版本：\n"
-            "- PySide6: pip install PySide6-Fluent-Widgets\n"
-            "- PyQt6:   pip install PyQt6-Fluent-Widgets\n"
+            "- PyQt6: pip install PyQt6-Fluent-Widgets\n"
             "如果你要使用 Pro，请按官方文档安装 Pro 版本。"
         ) from last_exc
 
@@ -89,6 +70,7 @@ def _import_fluent():
         "InfoBarPosition": module.InfoBarPosition,
         "FluentIcon": module.FluentIcon,
         "ToolButton": module.ToolButton,
+        "set_theme_color": module.setThemeColor,
         "is_pro": is_pro,
     }
 
@@ -110,6 +92,7 @@ InfoBar = FW["InfoBar"]
 InfoBarPosition = FW["InfoBarPosition"]
 FluentIcon = FW["FluentIcon"]
 ToolButton = FW["ToolButton"]
+setThemeColor = FW["set_theme_color"]
 IS_PRO = FW["is_pro"]
 
 
@@ -121,12 +104,13 @@ def _pick_icon(*names: str):
     return FluentIcon.APPLICATION
 
 
-class MainWindow(QMainWindow):
+class MainWindow(FramelessMainWindow):
     def __init__(self):
         super().__init__()
         edition = "Pro" if IS_PRO else "Base"
         self.setWindowTitle(f"Meizu LivePhoto Fix - Fluent {edition} ({QT_BINDING})")
         self.resize(1280, 860)
+        self._acrylic_applied = False
 
         self.items: dict[str, PhotoItem] = {}
 
@@ -292,6 +276,17 @@ class MainWindow(QMainWindow):
         outer.addWidget(table_card, 1)
         outer.addWidget(foot_card)
 
+    def showEvent(self, e):
+        super().showEvent(e)
+        if self._acrylic_applied:
+            return
+        if sys.platform == "win32" and hasattr(self, "windowEffect"):
+            try:
+                self.windowEffect.setAcrylicEffect(self.winId(), "F2F8FFCC")
+            except Exception:
+                pass
+        self._acrylic_applied = True
+
     def _notify(self, title: str, content: str, is_error: bool = False):
         if is_error:
             InfoBar.error(
@@ -435,6 +430,7 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setFont(QFont("Segoe UI", 10))
+    setThemeColor("#1677FF")
     setTheme(Theme.LIGHT)
 
     win = MainWindow()

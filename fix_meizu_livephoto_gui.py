@@ -1,7 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import os
-from fix_meizu_livephoto import LivePhotoFixTool  # 导入逻辑层
 
 
 class LivePhotoApp:
@@ -11,7 +10,7 @@ class LivePhotoApp:
         self.root.geometry("600x450")
 
         # 初始化逻辑引擎
-        self.engine = LivePhotoFixTool()
+        # self.engine = LivePhotoFixTool()
 
         self.setup_ui()
 
