@@ -218,6 +218,7 @@ class MainWindow(FramelessMainWindow):
         btn_invert.setToolTip("反选")
         btn_invert.clicked.connect(self.invert_rows)
 
+        row4.addStretch(1)
         row4.addWidget(btn_scan)
         row4.addWidget(btn_fix)
         row4.addWidget(btn_copy)
@@ -225,7 +226,6 @@ class MainWindow(FramelessMainWindow):
         row4.addSpacing(8)
         row4.addWidget(btn_all)
         row4.addWidget(btn_invert)
-        row4.addStretch(1)
         action_layout.addLayout(row4)
 
         table_card = CardWidget(self)
@@ -270,10 +270,14 @@ class MainWindow(FramelessMainWindow):
 
         self.progress = ProgressBar(self)
         self.progress.setRange(0, 100)
+        self.progress.setFixedHeight(14)
+        self.progress.setMinimumWidth(280)
+        self.progress.setMaximumWidth(420)
         self.status = BodyLabel("等待选择目录", self)
         self.status.setStyleSheet("color: #475467;")
-        foot_layout.addWidget(self.progress, 2)
-        foot_layout.addWidget(self.status, 3)
+        foot_layout.addStretch(1)
+        foot_layout.addWidget(self.progress, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        foot_layout.addWidget(self.status, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         outer.addWidget(header_card)
         outer.addWidget(path_card)
