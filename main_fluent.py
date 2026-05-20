@@ -2,13 +2,16 @@
 
 import sys
 import importlib
+import subprocess
+import os
+from collections import deque
 from pathlib import Path
 
 from gui_logic import PhotoItem, export_items, fix_items, scan_photo_items, format_size
 from meizu_core import LivePhotoFixTool, check_photo_type
 from qframelesswindow import FramelessMainWindow, StandardTitleBar
 
-from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtCore import QEvent, QTimer, Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
@@ -17,6 +20,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QTableWidgetItem,
     QVBoxLayout,
@@ -25,6 +29,12 @@ from PyQt6.QtWidgets import (
 )
 
 QT_BINDING = "PyQt6"
+
+if sys.platform == "win32":
+    import win32api  # type: ignore
+    import win32con  # type: ignore
+    import win32gui  # type: ignore
+    from win32com.shell import shell, shellcon  # type: ignore
 
 
 def _import_fluent():
@@ -374,8 +384,138 @@ class MainWindow(FramelessMainWindow):
                 self.table.setItem(row, 5, QTableWidgetItem(status))
                 return
 
+    def _item_from_row(self, row: int) -> PhotoItem | None:
+        if row < 0:
+            return None
+        cb = self.table.cellWidget(row, 0)
+        if not isinstance(cb, CheckBox):
+            return None
+        item_id = cb.property("item_id")
+        if not isinstance(item_id, str):
+            return None
+        return self.items.get(item_id)
+
+    def _get_shell_verbs(self, path: Path) -> list[tuple[str, object]]:
+        try:
+            import win32com.client  # type: ignore
+        except Exception:
+            return []
+
+        try:
+            shell = win32com.client.Dispatch("Shell.Application")
+            folder = shell.NameSpace(str(path.parent))
+            if folder is None:
+                return []
+            file_item = folder.ParseName(path.name)
+            if file_item is None:
+                return []
+            verbs = []
+            for verb in file_item.Verbs():
+                name = str(verb.Name).replace("&", "").strip()
+                if not name:
+                    continue
+                verbs.append((name, verb))
+            return verbs
+        except Exception:
+            return []
+
+    def _show_explorer_context_menu(self, file_paths: list[Path], global_pos) -> bool:
+        if sys.platform != "win32" or not file_paths:
+            return False
+
+        try:
+            folder = shell.SHGetDesktopFolder()
+            abs_paths = [str(p.resolve()) for p in file_paths]
+            parent_dir = str(Path(abs_paths[0]).parent)
+
+            parent_pidl = shell.SHParseDisplayName(parent_dir, 0)[0]
+            parent_folder = folder.BindToObject(parent_pidl, None, shell.IID_IShellFolder)
+
+            child_pidls = []
+            for p in abs_paths:
+                rel_name = Path(p).name
+                child_pidl = parent_folder.ParseDisplayName(0, None, rel_name)[1]
+                child_pidls.append(child_pidl)
+
+            _inout, cm = parent_folder.GetUIObjectOf(
+                int(self.table.winId()),
+                child_pidls,
+                shell.IID_IContextMenu,
+                0,
+                shell.IID_IContextMenu,
+            )
+
+            hmenu = win32gui.CreatePopupMenu()
+            try:
+                id_cmd_first = 1
+                flags = shellcon.CMF_NORMAL
+                cm.QueryContextMenu(hmenu, 0, id_cmd_first, 0x7FFF, flags)
+
+                win32gui.SetForegroundWindow(int(self.table.winId()))
+                cmd = win32gui.TrackPopupMenu(
+                    hmenu,
+                    win32con.TPM_LEFTALIGN | win32con.TPM_RETURNCMD | win32con.TPM_RIGHTBUTTON,
+                    global_pos.x(),
+                    global_pos.y(),
+                    0,
+                    int(self.table.winId()),
+                    None,
+                )
+            finally:
+                win32gui.DestroyMenu(hmenu)
+
+            if cmd:
+                ci = (0, int(self.table.winId()), cmd - id_cmd_first, None, parent_dir, 0, 0, 0)
+                cm.InvokeCommand(ci)
+            else:
+                win32gui.PostMessage(int(self.table.winId()), win32con.WM_NULL, 0, 0)
+            return True
+        except Exception:
+            return False
+
+    def _fallback_file_menu(self, menu: QMenu, path: Path):
+        act_open = menu.addAction("打开")
+        act_open.triggered.connect(lambda: subprocess.run(["cmd", "/c", "start", "", str(path)], check=False))
+
+        act_reveal = menu.addAction("打开所在目录")
+        act_reveal.triggered.connect(lambda: subprocess.run(["explorer", "/select,", str(path)], check=False))
+
+        act_copy_path = menu.addAction("复制路径")
+        act_copy_path.triggered.connect(lambda: QApplication.clipboard().setText(str(path)))
+
+    def _show_table_context_menu(self, pos):
+        row = self.table.rowAt(pos.y())
+        item = self._item_from_row(row)
+        if item is None:
+            return
+
+        file_path = item.jpg_path
+        global_pos = self.table.viewport().mapToGlobal(pos)
+        if self._show_explorer_context_menu([file_path], global_pos):
+            return
+
+        menu = QMenu(self)
+
+        verbs = self._get_shell_verbs(file_path) if sys.platform == "win32" else []
+        if verbs:
+            max_actions = 18
+            for i, (name, verb_obj) in enumerate(verbs):
+                if i >= max_actions:
+                    break
+                action = menu.addAction(name)
+                action.triggered.connect(lambda _checked=False, v=verb_obj: v.DoIt())
+            menu.addSeparator()
+            self._fallback_file_menu(menu, file_path)
+        else:
+            self._fallback_file_menu(menu, file_path)
+
+        menu.exec(global_pos)
+
     def eventFilter(self, obj, event):
         if obj is self.table.viewport():
+            if event.type() == QEvent.Type.ContextMenu:
+                self._show_table_context_menu(event.pos())
+                return True
             if event.type() == QEvent.Type.DragEnter:
                 if event.mimeData().hasUrls():
                     event.acceptProposedAction()
@@ -388,19 +528,26 @@ class MainWindow(FramelessMainWindow):
                 urls = event.mimeData().urls()
                 paths = [Path(url.toLocalFile()) for url in urls if url.isLocalFile()]
                 if paths:
-                    self._add_dropped_paths(paths)
+                    self._enqueue_dropped_paths(paths)
                     event.acceptProposedAction()
                     return True
         return super().eventFilter(obj, event)
 
     def _iter_drop_jpg_files(self, paths: list[Path]) -> list[Path]:
-        files: set[Path] = set()
+        files: list[Path] = []
         for p in paths:
-            if p.is_dir():
-                files.update(scan_path for scan_path in p.rglob("*") if scan_path.suffix.lower() in {".jpg", ".jpeg"})
-            elif p.is_file() and p.suffix.lower() in {".jpg", ".jpeg"}:
-                files.add(p)
-        return sorted(files, key=lambda x: str(x))
+            if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg"}:
+                files.append(p)
+            elif p.is_dir():
+                try:
+                    for root, _dirs, names in os.walk(p):
+                        base = Path(root)
+                        for name in names:
+                            if name.lower().endswith((".jpg", ".jpeg")):
+                                files.append(base / name)
+                except Exception:
+                    continue
+        return sorted(set(files), key=lambda x: str(x))
 
     def _photo_item_from_path(self, jpg_path: Path, idx: int) -> PhotoItem:
         try:
@@ -446,34 +593,85 @@ class MainWindow(FramelessMainWindow):
             self.table.setItem(row, 4, QTableWidgetItem("是" if item.is_live else "否"))
             self.table.setItem(row, 5, QTableWidgetItem(item.status))
 
-    def _add_dropped_paths(self, paths: list[Path]):
+    def _enqueue_dropped_paths(self, paths: list[Path]):
         jpg_files = self._iter_drop_jpg_files(paths)
         if not jpg_files:
             self._notify("无可添加文件", "仅支持拖入 JPG/JPEG 文件或文件夹", is_error=True)
             return
 
-        existed = {item.jpg_path.resolve() for item in self.items.values()}
-        added = 0
-        base_idx = len(self.items)
-        for jpg_path in jpg_files:
-            try:
-                resolved = jpg_path.resolve()
-            except Exception:
-                resolved = jpg_path
-            if resolved in existed:
-                continue
-            item = self._photo_item_from_path(jpg_path, base_idx + added)
-            self.items[item.item_id] = item
-            existed.add(resolved)
-            added += 1
+        if not hasattr(self, "_drop_queue"):
+            self._drop_queue = deque()
+            self._drop_total = 0
+            self._drop_added = 0
+            self._drop_seen: set[Path] = set()
+            self._drop_existing: set[Path] = set()
 
-        if added == 0:
+        existed: set[Path] = set()
+        for x in self.items.values():
+            try:
+                existed.add(x.jpg_path.resolve())
+            except Exception:
+                existed.add(x.jpg_path)
+        self._drop_existing = existed
+
+        enqueued = 0
+        for p in jpg_files:
+            try:
+                rp = p.resolve()
+            except Exception:
+                rp = p
+            if rp in existed or rp in self._drop_seen:
+                continue
+            self._drop_seen.add(rp)
+            self._drop_queue.append((p, rp))
+            enqueued += 1
+
+        if enqueued == 0:
             self._notify("未新增", "拖入文件已全部存在于列表中", is_error=True)
             return
 
-        self._refresh_table()
-        self.status.setText(f"已新增 {added} 个文件，当前共 {len(self.items)} 项")
-        self._notify("拖拽添加完成", f"新增 {added} 个文件")
+        self._drop_total += enqueued
+        self.status.setText(f"正在添加文件 0/{self._drop_total}")
+        if not hasattr(self, "_drop_timer"):
+            self._drop_timer = QTimer(self)
+            self._drop_timer.timeout.connect(self._process_drop_batch)
+        if not self._drop_timer.isActive():
+            self._drop_timer.start(0)
+
+    def _process_drop_batch(self):
+        batch_size = 20
+        if not hasattr(self, "_drop_queue") or not self._drop_queue:
+            if hasattr(self, "_drop_timer") and self._drop_timer.isActive():
+                self._drop_timer.stop()
+            total = getattr(self, "_drop_total", 0)
+            added = getattr(self, "_drop_added", 0)
+            if total > 0:
+                self.status.setText(f"已新增 {added} 个文件，当前共 {len(self.items)} 项")
+                self._notify("拖拽添加完成", f"新增 {added} / {total}")
+            self._drop_total = 0
+            self._drop_added = 0
+            self._drop_seen = set()
+            self._drop_existing = set()
+            return
+
+        changed = False
+        for _ in range(batch_size):
+            if not self._drop_queue:
+                break
+            jpg_path, resolved = self._drop_queue.popleft()
+            if resolved in self._drop_existing:
+                continue
+
+            idx = len(self.items)
+            item = self._photo_item_from_path(jpg_path, idx)
+            self.items[item.item_id] = item
+            self._drop_added += 1
+            self._drop_existing.add(resolved)
+            changed = True
+
+        if changed:
+            self._refresh_table()
+        self.status.setText(f"正在添加文件 {self._drop_added}/{self._drop_total}")
 
     def scan(self):
         src = self.input_edit.text().strip()
