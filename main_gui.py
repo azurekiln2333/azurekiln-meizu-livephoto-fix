@@ -4,6 +4,7 @@ import sys
 import importlib
 import subprocess
 import os
+import ctypes
 from pathlib import Path
 from uuid import uuid4
 
@@ -34,6 +35,37 @@ if sys.platform == "win32":
     import win32con  # type: ignore
     import win32gui  # type: ignore
     from win32com.shell import shell, shellcon  # type: ignore
+
+
+def _get_windows_pictures_dir() -> Path | None:
+    if sys.platform != "win32":
+        return None
+    try:
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", ctypes.c_uint32),
+                ("Data2", ctypes.c_uint16),
+                ("Data3", ctypes.c_uint16),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        f_id_pictures = GUID(
+            0x33E28130,
+            0x4E1E,
+            0x4676,
+            (ctypes.c_ubyte * 8)(0x83, 0x5A, 0x98, 0x39, 0x5C, 0x3B, 0xC3, 0xBB),
+        )
+        out_path = ctypes.c_wchar_p()
+        shell32 = ctypes.windll.shell32
+        ole32 = ctypes.windll.ole32
+        hr = shell32.SHGetKnownFolderPath(ctypes.byref(f_id_pictures), 0, None, ctypes.byref(out_path))
+        if hr != 0 or not out_path.value:
+            return None
+        path = Path(out_path.value)
+        ole32.CoTaskMemFree(out_path)
+        return path
+    except Exception:
+        return None
 
 
 class DropScanWorker(QObject):
@@ -462,7 +494,8 @@ class MainWindow(FramelessMainWindow):
                 cb.setChecked(row in selected_rows)
 
     def _init_default_output_dir(self):
-        base = Path.home() / "Pictures" / "FlymeLivePhotoFix"
+        pics_dir = _get_windows_pictures_dir() or (Path.home() / "Pictures")
+        base = pics_dir / "FlymeLivePhotoFix"
         try:
             base.mkdir(parents=True, exist_ok=True)
         except Exception:
