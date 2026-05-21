@@ -12,7 +12,7 @@ from main_gui_logic import PhotoItem, export_items, fix_items, format_size
 from flyme_livephoto_fix_core import LivePhotoFixTool, check_photo_type
 from qframelesswindow import FramelessMainWindow, StandardTitleBar
 
-from PyQt6.QtCore import QEvent, QObject, QThread, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QThread, Qt, pyqtSignal, QRect, QItemSelectionModel
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMenu,
     QMessageBox,
+    QRubberBand,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -410,6 +411,12 @@ class MainWindow(FramelessMainWindow):
         self._drop_thread: QThread | None = None
         self._drop_worker: DropScanWorker | None = None
         self._suspend_selection_sync = False
+        self._rubber_band_origin = None
+        self._rubber_band_press_pos = None
+        self._rubber_band_pending = False
+        self._rubber_band_active = False
+        self._rubber_band_additive = False
+        self._rubber_band_base_rows: set[int] = set()
         self._fix_running = False
         self._fix_paused = False
         self._fix_stop_requested = False
@@ -557,6 +564,12 @@ class MainWindow(FramelessMainWindow):
         self.table.viewport().setAcceptDrops(True)
         self.table.viewport().installEventFilter(self)
         self.table.setSortingEnabled(True)
+        self._rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self.table.viewport())
+        self._rubber_band.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._rubber_band.setStyleSheet(
+            "background-color: rgba(0, 120, 215, 40); border: 1px solid rgba(0, 120, 215, 180);"
+        )
+        self._rubber_band.hide()
 
         header = self.table.horizontalHeader()
         header.setSortIndicatorShown(True)
@@ -720,6 +733,85 @@ class MainWindow(FramelessMainWindow):
             duration=1800,
             parent=self,
         )
+
+    def _row_rect(self, row: int) -> QRect:
+        y = self.table.rowViewportPosition(row)
+        h = self.table.rowHeight(row)
+        if y < 0 or h <= 0:
+            return QRect()
+        return QRect(0, y, self.table.viewport().width(), h)
+
+    def _rows_in_rect(self, rect: QRect) -> list[int]:
+        band_rect = rect.normalized().intersected(self.table.viewport().rect())
+        if band_rect.isEmpty():
+            return []
+        rows: list[int] = []
+        for row in range(self.table.rowCount()):
+            row_rect = self._row_rect(row)
+            if row_rect.isValid() and row_rect.intersects(band_rect):
+                rows.append(row)
+        return rows
+
+    def _apply_row_selection(self, rows: list[int]):
+        model = self.table.selectionModel()
+        if model is None:
+            return
+        model.clearSelection()
+        if not rows:
+            return
+        flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+        for row in rows:
+            idx = self.table.model().index(row, 0)
+            if idx.isValid():
+                model.select(idx, flags)
+
+    def _start_rubber_band(self, pos, additive: bool):
+        self._rubber_band_origin = pos
+        self._rubber_band_press_pos = pos
+        self._rubber_band_additive = additive
+        self._rubber_band_active = True
+        model = self.table.selectionModel()
+        self._rubber_band_base_rows = {idx.row() for idx in model.selectedRows()} if additive and model else set()
+        self._rubber_band.setGeometry(QRect(pos, pos))
+        self._rubber_band.show()
+        self._rubber_band.raise_()
+        if not additive:
+            self.table.clearSelection()
+            self.table.setCurrentCell(-1, -1)
+
+    def _update_rubber_band(self, pos):
+        if not self._rubber_band_active or self._rubber_band_origin is None:
+            return
+        rect = QRect(self._rubber_band_origin, pos).normalized()
+        self._rubber_band.setGeometry(rect)
+        rows = set(self._rows_in_rect(rect))
+        if self._rubber_band_additive:
+            rows |= self._rubber_band_base_rows
+        self._apply_row_selection(sorted(rows))
+
+    def _finish_rubber_band(self, pos):
+        if not self._rubber_band_active or self._rubber_band_origin is None:
+            return
+        rect = QRect(self._rubber_band_origin, pos).normalized()
+        self._rubber_band.hide()
+        self._rubber_band_active = False
+        self._rubber_band_origin = None
+        rows = set(self._rows_in_rect(rect))
+        if self._rubber_band_additive:
+            rows |= self._rubber_band_base_rows
+        self._apply_row_selection(sorted(rows))
+        self._rubber_band_base_rows.clear()
+        self._rubber_band_press_pos = None
+        self._rubber_band_pending = False
+        self._sync_checks_to_selection()
+
+    def _cancel_rubber_band(self):
+        self._rubber_band.hide()
+        self._rubber_band_origin = None
+        self._rubber_band_press_pos = None
+        self._rubber_band_pending = False
+        self._rubber_band_active = False
+        self._rubber_band_base_rows.clear()
 
     def _on_header_sort_clicked(self, _logical_index: int):
         # Keep checkbox state as-is, only clear visual row selection highlight.
@@ -916,7 +1008,27 @@ class MainWindow(FramelessMainWindow):
             if event.type() == QEvent.Type.ContextMenu:
                 self._show_table_context_menu(event.pos())
                 return True
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                self._rubber_band_press_pos = event.pos()
+                self._rubber_band_pending = True
+                self._rubber_band_active = False
+                return False
+            if event.type() == QEvent.Type.MouseMove and self._rubber_band_active:
+                if event.buttons() & Qt.MouseButton.LeftButton:
+                    self._update_rubber_band(event.pos())
+                    return True
+            if event.type() == QEvent.Type.MouseMove and self._rubber_band_pending and self._rubber_band_press_pos is not None:
+                if event.buttons() & Qt.MouseButton.LeftButton:
+                    if (event.pos() - self._rubber_band_press_pos).manhattanLength() >= QApplication.startDragDistance():
+                        additive = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+                        self._start_rubber_band(self._rubber_band_press_pos, additive)
+                        self._update_rubber_band(event.pos())
+                        return True
             if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                if self._rubber_band_active:
+                    self._finish_rubber_band(event.pos())
+                    return True
+                self._cancel_rubber_band()
                 self._sync_checks_to_selection()
                 return False
             if event.type() == QEvent.Type.DragEnter:

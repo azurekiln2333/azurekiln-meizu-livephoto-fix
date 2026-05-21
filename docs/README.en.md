@@ -19,7 +19,7 @@ Main capabilities:
 - PyQt6-only Qt stack
 - Blue immersive title bar
 - Asynchronous drag-drop parsing (background worker)
-- Mouse drag multi-selection (`ExtendedSelection`)
+- Mouse drag multi-selection with a blue rubber-band box
 - Clickable header sorting
 - Sorting clears row highlight only (checkbox states remain unchanged)
 - Default output directory:
