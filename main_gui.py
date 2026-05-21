@@ -12,7 +12,7 @@ from main_gui_logic import PhotoItem, export_items, fix_items, format_size
 from flyme_livephoto_fix_core import LivePhotoFixTool, check_photo_type
 from qframelesswindow import FramelessMainWindow, StandardTitleBar
 
-from PyQt6.QtCore import QEvent, QObject, QThread, Qt, pyqtSignal, QRect, QItemSelectionModel
+from PyQt6.QtCore import QEvent, QObject, QThread, Qt, pyqtSignal, QRect, QItemSelectionModel, QPoint, QTimer
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
@@ -74,10 +74,11 @@ class DropScanWorker(QObject):
     progress = pyqtSignal(int, int, str)
     finished = pyqtSignal(int, int)
 
-    def __init__(self, paths: list[Path], existing: set[Path]):
+    def __init__(self, paths: list[Path], existing: set[Path], scan_subdirs: bool = True):
         super().__init__()
         self.paths = paths
         self.existing = existing
+        self.scan_subdirs = scan_subdirs
 
     def _iter_jpg_files(self) -> list[Path]:
         files: list[Path] = []
@@ -88,11 +89,16 @@ class DropScanWorker(QObject):
             if not p.is_dir():
                 continue
             try:
-                for root, _dirs, names in os.walk(p):
-                    base = Path(root)
-                    for name in names:
-                        if name.lower().endswith((".jpg", ".jpeg")):
-                            files.append(base / name)
+                if self.scan_subdirs:
+                    for root, _dirs, names in os.walk(p):
+                        base = Path(root)
+                        for name in names:
+                            if name.lower().endswith((".jpg", ".jpeg")):
+                                files.append(base / name)
+                else:
+                    for child in p.iterdir():
+                        if child.is_file() and child.suffix.lower() in {".jpg", ".jpeg"}:
+                            files.append(child)
             except Exception:
                 continue
         return sorted(set(files), key=lambda x: str(x))
@@ -242,6 +248,7 @@ TRANSLATIONS = {
         "output_placeholder": "输出目录（默认图片目录）",
         "choose_output": "选择输出目录",
         "output_dir": "输出目录",
+        "scan_subdirs": "扫描子目录",
         "skip_existing": "目标已存在时跳过",
         "overwrite_existing": "目标已存在时覆盖",
         "fix_checked": "修复勾选项",
@@ -265,6 +272,8 @@ TRANSLATIONS = {
         "dialog_choose_output": "选择输出目录",
         "open": "打开",
         "open_folder": "打开所在目录",
+        "copy_files": "复制文件",
+        "cut_files": "剪切文件",
         "copy_path": "复制路径",
         "system_context_menu": "系统右键菜单...",
         "yes": "是",
@@ -318,6 +327,7 @@ TRANSLATIONS = {
         "output_placeholder": "Output folder (Pictures by default)",
         "choose_output": "Choose output folder",
         "output_dir": "Output folder",
+        "scan_subdirs": "Scan subfolders",
         "skip_existing": "Skip when target exists",
         "overwrite_existing": "Overwrite when target exists",
         "fix_checked": "Fix selected",
@@ -341,6 +351,8 @@ TRANSLATIONS = {
         "dialog_choose_output": "Choose output folder",
         "open": "Open",
         "open_folder": "Show in folder",
+        "copy_files": "Copy files",
+        "cut_files": "Cut files",
         "copy_path": "Copy path",
         "system_context_menu": "System context menu...",
         "yes": "Yes",
@@ -413,10 +425,14 @@ class MainWindow(FramelessMainWindow):
         self._suspend_selection_sync = False
         self._rubber_band_origin = None
         self._rubber_band_press_pos = None
+        self._rubber_band_last_pos = None
         self._rubber_band_pending = False
         self._rubber_band_active = False
         self._rubber_band_additive = False
         self._rubber_band_base_rows: set[int] = set()
+        self._rubber_band_scroll_timer = QTimer(self)
+        self._rubber_band_scroll_timer.setInterval(16)
+        self._rubber_band_scroll_timer.timeout.connect(self._auto_scroll_rubber_band)
         self._fix_running = False
         self._fix_paused = False
         self._fix_stop_requested = False
@@ -487,9 +503,12 @@ class MainWindow(FramelessMainWindow):
 
         row3 = QHBoxLayout()
         row3.setSpacing(12)
+        self.scan_subdirs_check = CheckBox(self.tr("scan_subdirs"), self)
+        self.scan_subdirs_check.setChecked(True)
         self.skip_radio = RadioButton(self.tr("skip_existing"), self)
         self.overwrite_radio = RadioButton(self.tr("overwrite_existing"), self)
         self.skip_radio.setChecked(True)
+        row3.addWidget(self.scan_subdirs_check)
         row3.addStretch(1)
         row3.addWidget(self.skip_radio)
         row3.addWidget(self.overwrite_radio)
@@ -594,7 +613,7 @@ class MainWindow(FramelessMainWindow):
 
         self.progress = ProgressBar(self)
         self.progress.setRange(0, 100)
-        self.progress.setFixedHeight(14)
+        self.progress.setFixedHeight(10)
         self.progress.setMinimumWidth(280)
         self.progress.setMaximumWidth(420)
         self.status = BodyLabel(self.tr("waiting_choose_dir"), self)
@@ -655,6 +674,7 @@ class MainWindow(FramelessMainWindow):
         self.output_edit.setPlaceholderText(self.tr("output_placeholder"))
         self.btn_output.setText(self.tr("choose_output"))
         self.output_label.setText(self.tr("output_dir"))
+        self.scan_subdirs_check.setText(self.tr("scan_subdirs"))
         self.skip_radio.setText(self.tr("skip_existing"))
         self.overwrite_radio.setText(self.tr("overwrite_existing"))
         self.btn_fix.setText(self.tr("fix_checked"))
@@ -734,15 +754,21 @@ class MainWindow(FramelessMainWindow):
             parent=self,
         )
 
+    def _viewport_to_content_pos(self, pos: QPoint) -> QPoint:
+        return QPoint(pos.x(), pos.y() + self.table.verticalScrollBar().value())
+
+    def _content_to_clamped_viewport_pos(self, pos: QPoint) -> QPoint:
+        return self._clamp_rubber_band_pos(QPoint(pos.x(), pos.y() - self.table.verticalScrollBar().value()))
+
     def _row_rect(self, row: int) -> QRect:
-        y = self.table.rowViewportPosition(row)
+        y = self.table.rowViewportPosition(row) + self.table.verticalScrollBar().value()
         h = self.table.rowHeight(row)
         if y < 0 or h <= 0:
             return QRect()
         return QRect(0, y, self.table.viewport().width(), h)
 
     def _rows_in_rect(self, rect: QRect) -> list[int]:
-        band_rect = rect.normalized().intersected(self.table.viewport().rect())
+        band_rect = rect.normalized()
         if band_rect.isEmpty():
             return []
         rows: list[int] = []
@@ -765,16 +791,24 @@ class MainWindow(FramelessMainWindow):
             if idx.isValid():
                 model.select(idx, flags)
 
+    def _clamp_rubber_band_pos(self, pos: QPoint) -> QPoint:
+        rect = self.table.viewport().rect()
+        x = min(max(pos.x(), rect.left()), rect.right())
+        y = min(max(pos.y(), rect.top()), rect.bottom())
+        return QPoint(x, y)
+
     def _start_rubber_band(self, pos, additive: bool):
-        self._rubber_band_origin = pos
+        self._rubber_band_origin = self._viewport_to_content_pos(pos)
         self._rubber_band_press_pos = pos
+        self._rubber_band_last_pos = pos
         self._rubber_band_additive = additive
         self._rubber_band_active = True
         model = self.table.selectionModel()
         self._rubber_band_base_rows = {idx.row() for idx in model.selectedRows()} if additive and model else set()
-        self._rubber_band.setGeometry(QRect(pos, pos))
+        self._rubber_band.setGeometry(QRect(self._clamp_rubber_band_pos(pos), self._clamp_rubber_band_pos(pos)))
         self._rubber_band.show()
         self._rubber_band.raise_()
+        self._rubber_band_scroll_timer.start()
         if not additive:
             self.table.clearSelection()
             self.table.setCurrentCell(-1, -1)
@@ -782,33 +816,63 @@ class MainWindow(FramelessMainWindow):
     def _update_rubber_band(self, pos):
         if not self._rubber_band_active or self._rubber_band_origin is None:
             return
-        rect = QRect(self._rubber_band_origin, pos).normalized()
-        self._rubber_band.setGeometry(rect)
-        rows = set(self._rows_in_rect(rect))
+        self._rubber_band_last_pos = pos
+        current_content_pos = self._viewport_to_content_pos(pos)
+        draw_rect = QRect(
+            self._content_to_clamped_viewport_pos(self._rubber_band_origin),
+            self._clamp_rubber_band_pos(pos),
+        ).normalized()
+        self._rubber_band.setGeometry(draw_rect)
+        rows = set(self._rows_in_rect(QRect(self._rubber_band_origin, current_content_pos).normalized()))
         if self._rubber_band_additive:
             rows |= self._rubber_band_base_rows
         self._apply_row_selection(sorted(rows))
 
+    def _auto_scroll_rubber_band(self):
+        if not self._rubber_band_active or self._rubber_band_last_pos is None:
+            return
+        rect = self.table.viewport().rect()
+        pos = self._rubber_band_last_pos
+        dy = 0
+        if pos.y() < rect.top():
+            distance = rect.top() - pos.y()
+            dy = -min(24, max(2, distance // 6 + 2))
+        elif pos.y() > rect.bottom():
+            distance = pos.y() - rect.bottom()
+            dy = min(24, max(2, distance // 6 + 2))
+        if dy == 0:
+            return
+        bar = self.table.verticalScrollBar()
+        new_value = min(max(bar.value() + dy, bar.minimum()), bar.maximum())
+        if new_value == bar.value():
+            return
+        bar.setValue(new_value)
+        self._update_rubber_band(pos)
+
     def _finish_rubber_band(self, pos):
         if not self._rubber_band_active or self._rubber_band_origin is None:
             return
-        rect = QRect(self._rubber_band_origin, pos).normalized()
+        current_content_pos = self._viewport_to_content_pos(pos)
         self._rubber_band.hide()
+        self._rubber_band_scroll_timer.stop()
         self._rubber_band_active = False
+        rows = set(self._rows_in_rect(QRect(self._rubber_band_origin, current_content_pos).normalized()))
         self._rubber_band_origin = None
-        rows = set(self._rows_in_rect(rect))
         if self._rubber_band_additive:
             rows |= self._rubber_band_base_rows
         self._apply_row_selection(sorted(rows))
         self._rubber_band_base_rows.clear()
         self._rubber_band_press_pos = None
+        self._rubber_band_last_pos = None
         self._rubber_band_pending = False
         self._sync_checks_to_selection()
 
     def _cancel_rubber_band(self):
         self._rubber_band.hide()
+        self._rubber_band_scroll_timer.stop()
         self._rubber_band_origin = None
         self._rubber_band_press_pos = None
+        self._rubber_band_last_pos = None
         self._rubber_band_pending = False
         self._rubber_band_active = False
         self._rubber_band_base_rows.clear()
@@ -867,6 +931,28 @@ class MainWindow(FramelessMainWindow):
                     selected.append(self.items[item_id])
         return selected
 
+    def _selected_row_numbers(self) -> list[int]:
+        model = self.table.selectionModel()
+        if model is None:
+            return []
+        return sorted({idx.row() for idx in model.selectedRows()})
+
+    def _context_file_paths(self, row: int) -> list[Path]:
+        item = self._item_from_row(row)
+        if item is None:
+            return []
+        selected_rows = self._selected_row_numbers()
+        if row in selected_rows:
+            paths = [self._item_from_row(selected_row) for selected_row in selected_rows]
+            return [path_item.jpg_path for path_item in paths if path_item is not None]
+        self.table.clearSelection()
+        idx = self.table.model().index(row, 0)
+        if idx.isValid():
+            flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+            self.table.selectionModel().select(idx, flags)
+        self.table.setCurrentCell(row, 1)
+        return [item.jpg_path]
+
     def _set_row_status(self, item_id: str, status: str):
         for row in range(self.table.rowCount()):
             cb = self._cell_checkbox(row)
@@ -916,6 +1002,9 @@ class MainWindow(FramelessMainWindow):
         try:
             folder = shell.SHGetDesktopFolder()
             abs_paths = [str(p.resolve()) for p in file_paths]
+            parent_dirs = {str(Path(p).parent) for p in abs_paths}
+            if len(parent_dirs) != 1:
+                return False
             parent_dir = str(Path(abs_paths[0]).parent)
 
             parent_pidl = shell.SHParseDisplayName(parent_dir, 0)[0]
@@ -963,32 +1052,134 @@ class MainWindow(FramelessMainWindow):
         except Exception:
             return False
 
-    def _fallback_file_menu(self, menu: QMenu, path: Path):
-        act_open = menu.addAction(self.tr("open"))
-        act_open.triggered.connect(lambda: subprocess.run(["cmd", "/c", "start", "", str(path)], check=False))
+    def _set_file_clipboard(self, paths: list[Path], cut: bool = False) -> bool:
+        if not paths:
+            return False
+        if sys.platform != "win32":
+            QApplication.clipboard().setText("\n".join(str(p) for p in paths))
+            return True
+
+        class _Point(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+        class _DropFiles(ctypes.Structure):
+            _fields_ = [
+                ("pFiles", ctypes.c_uint32),
+                ("pt", _Point),
+                ("fNC", ctypes.c_int),
+                ("fWide", ctypes.c_int),
+            ]
+
+        def _alloc_block(raw: bytes):
+            kernel32 = ctypes.windll.kernel32
+            kernel32.GlobalAlloc.restype = ctypes.c_void_p
+            kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+            kernel32.GlobalLock.restype = ctypes.c_void_p
+            kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+            kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+            kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+            handle = kernel32.GlobalAlloc(0x0042, len(raw))
+            if not handle:
+                raise MemoryError("GlobalAlloc failed")
+            locked = kernel32.GlobalLock(handle)
+            if not locked:
+                kernel32.GlobalFree(handle)
+                raise MemoryError("GlobalLock failed")
+            try:
+                ctypes.memmove(locked, raw, len(raw))
+            finally:
+                kernel32.GlobalUnlock(handle)
+            return handle
+
+        try:
+            abs_paths = [str(p.resolve()) for p in paths]
+        except Exception:
+            abs_paths = [str(p) for p in paths]
+        file_list = ("\0".join(abs_paths) + "\0\0").encode("utf-16le")
+        header = _DropFiles(pFiles=ctypes.sizeof(_DropFiles), pt=_Point(0, 0), fNC=0, fWide=1)
+        payload = ctypes.string_at(ctypes.byref(header), ctypes.sizeof(header)) + file_list
+        effect = (2 if cut else 1).to_bytes(4, "little")
+        text = ("\r\n".join(abs_paths) + "\0").encode("utf-16le")
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+        user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+        user32.SetClipboardData.restype = ctypes.c_void_p
+        cf_hdrop = 15
+        cf_unicode_text = 13
+        preferred_effect = user32.RegisterClipboardFormatW("Preferred DropEffect")
+        drop_handle = _alloc_block(payload)
+        effect_handle = _alloc_block(effect)
+        text_handle = _alloc_block(text)
+        try:
+            if not user32.OpenClipboard(int(self.winId())):
+                return False
+            try:
+                user32.EmptyClipboard()
+                if not user32.SetClipboardData(cf_hdrop, drop_handle):
+                    return False
+                drop_handle = None
+                if preferred_effect and user32.SetClipboardData(preferred_effect, effect_handle):
+                    effect_handle = None
+                if user32.SetClipboardData(cf_unicode_text, text_handle):
+                    text_handle = None
+                return True
+            finally:
+                user32.CloseClipboard()
+        finally:
+            if drop_handle:
+                kernel32.GlobalFree(drop_handle)
+            if effect_handle:
+                kernel32.GlobalFree(effect_handle)
+            if text_handle:
+                kernel32.GlobalFree(text_handle)
+
+    def _copy_paths_text(self, paths: list[Path]):
+        QApplication.clipboard().setText("\n".join(str(p) for p in paths))
+
+    def _append_file_clipboard_actions(self, menu: QMenu, paths: list[Path]):
+        if not paths:
+            return
+        act_copy_files = menu.addAction(self.tr("copy_files"))
+        act_copy_files.triggered.connect(lambda: self._set_file_clipboard(paths, cut=False))
+
+        act_cut_files = menu.addAction(self.tr("cut_files"))
+        act_cut_files.triggered.connect(lambda: self._set_file_clipboard(paths, cut=True))
+
+    def _fallback_file_menu(self, menu: QMenu, paths: list[Path]):
+        if not paths:
+            return
+        first_path = paths[0]
+        if len(paths) == 1:
+            act_open = menu.addAction(self.tr("open"))
+            act_open.triggered.connect(lambda: subprocess.run(["cmd", "/c", "start", "", str(first_path)], check=False))
 
         act_reveal = menu.addAction(self.tr("open_folder"))
-        act_reveal.triggered.connect(lambda: subprocess.run(["explorer", "/select,", str(path)], check=False))
+        act_reveal.triggered.connect(lambda: subprocess.run(["explorer", "/select,", str(first_path)], check=False))
 
         act_copy_path = menu.addAction(self.tr("copy_path"))
-        act_copy_path.triggered.connect(lambda: QApplication.clipboard().setText(str(path)))
+        act_copy_path.triggered.connect(lambda: self._copy_paths_text(paths))
 
     def _show_table_context_menu(self, pos):
         row = self.table.rowAt(pos.y())
-        item = self._item_from_row(row)
-        if item is None:
+        file_paths = self._context_file_paths(row)
+        if not file_paths:
             return
-        self.table.setCurrentCell(row, 1)
-
-        file_path = item.jpg_path
         global_pos = self.table.viewport().mapToGlobal(pos)
         menu = QMenu(self)
+        same_parent = len({str(path.parent) for path in file_paths}) == 1
+
+        self._append_file_clipboard_actions(menu, file_paths)
+        menu.addSeparator()
+
         if sys.platform == "win32":
             act_shell = menu.addAction(self.tr("system_context_menu"))
-            act_shell.triggered.connect(lambda: self._show_explorer_context_menu([file_path], global_pos))
+            act_shell.setEnabled(same_parent)
+            act_shell.triggered.connect(lambda: self._show_explorer_context_menu(file_paths, global_pos))
             menu.addSeparator()
 
-        verbs = self._get_shell_verbs(file_path) if sys.platform == "win32" else []
+        verbs = self._get_shell_verbs(file_paths[0]) if sys.platform == "win32" and len(file_paths) == 1 else []
         if verbs:
             max_actions = 10
             for i, (name, verb_obj) in enumerate(verbs):
@@ -997,9 +1188,9 @@ class MainWindow(FramelessMainWindow):
                 action = menu.addAction(name)
                 action.triggered.connect(lambda _checked=False, v=verb_obj: v.DoIt())
             menu.addSeparator()
-            self._fallback_file_menu(menu, file_path)
+            self._fallback_file_menu(menu, file_paths)
         else:
-            self._fallback_file_menu(menu, file_path)
+            self._fallback_file_menu(menu, file_paths)
 
         menu.exec(global_pos)
 
@@ -1090,7 +1281,7 @@ class MainWindow(FramelessMainWindow):
         self.progress.setRange(0, 0)
 
         self._drop_thread = QThread(self)
-        self._drop_worker = DropScanWorker(paths, self._current_existing_paths())
+        self._drop_worker = DropScanWorker(paths, self._current_existing_paths(), self.scan_subdirs_check.isChecked())
         self._drop_worker.moveToThread(self._drop_thread)
         self._drop_thread.started.connect(self._drop_worker.run)
         self._drop_worker.batch_ready.connect(self._on_drop_batch_ready)
