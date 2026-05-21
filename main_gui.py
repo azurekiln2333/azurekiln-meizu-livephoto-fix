@@ -267,12 +267,12 @@ class MainWindow(FramelessMainWindow):
         header_layout.setContentsMargins(18, 16, 18, 16)
         header_layout.setSpacing(4)
 
-        title = SubtitleLabel("魅族实况照片批量修复", self)
+        title = SubtitleLabel("魅族Flyme实况图LivePhoto兼容修复", self)
         title_font = QFont("Segoe UI", 15)
         title_font.setBold(True)
         title.setFont(title_font)
 
-        subtitle = BodyLabel("扫描、筛选并批量修复 LivePhoto，支持复制或移动导出", self)
+        subtitle = BodyLabel("修复兼容MotionPhotos支持，支持复制或移动导出", self)
         subtitle.setStyleSheet("color: #667085;")
 
 

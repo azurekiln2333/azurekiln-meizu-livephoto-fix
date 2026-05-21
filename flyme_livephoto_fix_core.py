@@ -39,6 +39,15 @@ class LivePhotoFixTool:
             bundle_path = os.path.join(sys._MEIPASS, 'exiftool.exe')
             if os.path.exists(bundle_path):
                 return bundle_path
+            # Some Windows exiftool builds are a launcher depending on exiftool_files.
+            # Keep a fallback search under a bundled exiftool folder.
+            bundle_path2 = os.path.join(sys._MEIPASS, 'exiftool', 'exiftool.exe')
+            if os.path.exists(bundle_path2):
+                return bundle_path2
+        # Prefer local bundled folder in development/runtime folder as well.
+        local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'exiftool', 'exiftool.exe')
+        if os.path.exists(local_path):
+            return local_path
         return 'exiftool'
 
     def _check_exiftool(self):
