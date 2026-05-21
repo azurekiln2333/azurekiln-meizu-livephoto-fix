@@ -31,7 +31,6 @@ from PyQt6.QtWidgets import (
 QT_BINDING = "PyQt6"
 
 if sys.platform == "win32":
-    import win32api  # type: ignore
     import win32con  # type: ignore
     import win32gui  # type: ignore
     from win32com.shell import shell, shellcon  # type: ignore
@@ -332,14 +331,17 @@ class MainWindow(FramelessMainWindow):
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setFrameShape(QFrame.Shape.NoFrame)
         self.table.setAcceptDrops(True)
         self.table.viewport().setAcceptDrops(True)
         self.table.viewport().installEventFilter(self)
+        self.table.setSortingEnabled(True)
 
         header = self.table.horizontalHeader()
+        header.setSortIndicatorShown(True)
+        header.setSectionsClickable(True)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -376,6 +378,13 @@ class MainWindow(FramelessMainWindow):
         outer.addWidget(foot_card)
         self._init_default_output_dir()
         self._sync_title_bar()
+
+    def _cell_checkbox(self, row: int) -> CheckBox | None:
+        wrap = self.table.cellWidget(row, 0)
+        if wrap is None:
+            return None
+        cb = wrap.findChild(CheckBox)
+        return cb if isinstance(cb, CheckBox) else None
 
     def _set_blue_title_bar(self):
         self.setTitleBar(StandardTitleBar(self))
@@ -452,7 +461,7 @@ class MainWindow(FramelessMainWindow):
     def _selected_items(self) -> list[PhotoItem]:
         selected: list[PhotoItem] = []
         for row in range(self.table.rowCount()):
-            cb = self.table.cellWidget(row, 0)
+            cb = self._cell_checkbox(row)
             if isinstance(cb, CheckBox) and cb.isChecked():
                 item_id = cb.property("item_id")
                 if isinstance(item_id, str) and item_id in self.items:
@@ -461,7 +470,7 @@ class MainWindow(FramelessMainWindow):
 
     def _set_row_status(self, item_id: str, status: str):
         for row in range(self.table.rowCount()):
-            cb = self.table.cellWidget(row, 0)
+            cb = self._cell_checkbox(row)
             if isinstance(cb, CheckBox) and cb.property("item_id") == item_id:
                 self.table.setItem(row, 5, QTableWidgetItem(status))
                 return
@@ -469,7 +478,7 @@ class MainWindow(FramelessMainWindow):
     def _item_from_row(self, row: int) -> PhotoItem | None:
         if row < 0:
             return None
-        cb = self.table.cellWidget(row, 0)
+        cb = self._cell_checkbox(row)
         if not isinstance(cb, CheckBox):
             return None
         item_id = cb.property("item_id")
@@ -574,14 +583,15 @@ class MainWindow(FramelessMainWindow):
 
         file_path = item.jpg_path
         global_pos = self.table.viewport().mapToGlobal(pos)
-        if self._show_explorer_context_menu([file_path], global_pos):
-            return
-
         menu = QMenu(self)
+        if sys.platform == "win32":
+            act_shell = menu.addAction("系统右键菜单...")
+            act_shell.triggered.connect(lambda: self._show_explorer_context_menu([file_path], global_pos))
+            menu.addSeparator()
 
         verbs = self._get_shell_verbs(file_path) if sys.platform == "win32" else []
         if verbs:
-            max_actions = 18
+            max_actions = 10
             for i, (name, verb_obj) in enumerate(verbs):
                 if i >= max_actions:
                     break
@@ -617,19 +627,27 @@ class MainWindow(FramelessMainWindow):
         return super().eventFilter(obj, event)
 
     def _refresh_table(self):
+        self.table.setSortingEnabled(False)
         rows = sorted(self.items.values(), key=lambda x: str(x.jpg_path))
         self.table.setRowCount(len(rows))
         for row, item in enumerate(rows):
-            cb = CheckBox(self)
+            cb = CheckBox(self.table)
             cb.setChecked(item.needs_process)
             cb.setProperty("item_id", item.item_id)
+            cb_wrap = QWidget(self.table)
+            cb_layout = QHBoxLayout(cb_wrap)
+            cb_layout.setContentsMargins(10, 0, 16, 0)
+            cb_layout.setSpacing(0)
+            cb_layout.addWidget(cb, 0, Qt.AlignmentFlag.AlignCenter)
+            cb_layout.addStretch(1)
 
-            self.table.setCellWidget(row, 0, cb)
+            self.table.setCellWidget(row, 0, cb_wrap)
             self.table.setItem(row, 1, QTableWidgetItem(str(item.rel_path)))
             self.table.setItem(row, 2, QTableWidgetItem(item.size_str))
             self.table.setItem(row, 3, QTableWidgetItem("是" if item.is_meizu else "否"))
             self.table.setItem(row, 4, QTableWidgetItem("是" if item.is_live else "否"))
             self.table.setItem(row, 5, QTableWidgetItem(item.status))
+        self.table.setSortingEnabled(True)
 
     def _current_existing_paths(self) -> set[Path]:
         existed: set[Path] = set()
@@ -690,13 +708,13 @@ class MainWindow(FramelessMainWindow):
 
     def select_all_rows(self):
         for row in range(self.table.rowCount()):
-            cb = self.table.cellWidget(row, 0)
+            cb = self._cell_checkbox(row)
             if isinstance(cb, CheckBox):
                 cb.setChecked(True)
 
     def invert_rows(self):
         for row in range(self.table.rowCount()):
-            cb = self.table.cellWidget(row, 0)
+            cb = self._cell_checkbox(row)
             if isinstance(cb, CheckBox):
                 cb.setChecked(not cb.isChecked())
 
@@ -719,13 +737,12 @@ class MainWindow(FramelessMainWindow):
         self.progress.setValue(100)
         self.status.setText(f"导出完成: 成功 {s} / 失败 {f}")
         self._notify("导出完成", f"成功 {s} / 失败 {f}")
-        self.scan()
+        self._refresh_table()
 
     def fix_checked(self):
-        src = self.input_edit.text().strip()
         dst = self.output_edit.text().strip()
-        if not src or not dst:
-            QMessageBox.warning(self, "提示", "请先选择源目录和输出目录")
+        if not dst:
+            QMessageBox.warning(self, "提示", "请先选择输出目录")
             return
 
         selected = [x for x in self._selected_items() if x.needs_process]
@@ -745,7 +762,7 @@ class MainWindow(FramelessMainWindow):
         self.progress.setValue(100)
         self.status.setText(f"完成: 成功 {s} / 失败 {f} / 冲突跳过 {skip}")
         self._notify("修复完成", f"成功 {s} / 失败 {f} / 冲突跳过 {skip}")
-        self.scan()
+        self._refresh_table()
 
 
 def main():
