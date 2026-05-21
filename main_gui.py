@@ -342,6 +342,7 @@ class MainWindow(FramelessMainWindow):
         header = self.table.horizontalHeader()
         header.setSortIndicatorShown(True)
         header.setSectionsClickable(True)
+        header.sectionClicked.connect(self._on_header_sort_clicked)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -442,6 +443,11 @@ class MainWindow(FramelessMainWindow):
             duration=1800,
             parent=self,
         )
+
+    def _on_header_sort_clicked(self, _logical_index: int):
+        # Keep checkbox state as-is, only clear visual row selection highlight.
+        self.table.clearSelection()
+        self.table.setCurrentCell(-1, -1)
 
     def _init_default_output_dir(self):
         base = Path.home() / "Pictures" / "FlymeLivePhotoFix"
@@ -679,6 +685,8 @@ class MainWindow(FramelessMainWindow):
         self._drop_thread.start()
 
     def _on_drop_batch_ready(self, batch):
+        for item in batch:
+            item.needs_process = True
         for item in batch:
             self.items[item.item_id] = item
         self._refresh_table()
