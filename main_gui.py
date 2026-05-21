@@ -17,6 +17,7 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QAbstractItemView,
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -105,13 +106,13 @@ class DropScanWorker(QObject):
 
         needs_process = is_live and not is_fixed
         if needs_process:
-            status = "等待处理"
+            status = "status_pending"
         elif is_fixed:
-            status = "已修复兼容"
+            status = "status_fixed_compatible"
         elif not is_meizu:
-            status = "非魅族设备照片"
+            status = "status_not_meizu"
         else:
-            status = "魅族普通静态图"
+            status = "status_static"
 
         return PhotoItem(
             item_id=f"drop_{uuid4().hex}",
@@ -229,6 +230,146 @@ setThemeColor = FW["set_theme_color"]
 IS_PRO = FW["is_pro"]
 
 
+TRANSLATIONS = {
+    "zh": {
+        "app_title": "Meizu LivePhoto Fix",
+        "missing_dependency_title": "依赖缺失",
+        "header_title": "魅族Flyme实况图LivePhoto兼容修复",
+        "header_subtitle": "修复兼容MotionPhotos支持，支持复制或移动导出",
+        "language": "界面语言",
+        "output_placeholder": "输出目录（默认图片目录）",
+        "choose_output": "选择输出目录",
+        "output_dir": "输出目录",
+        "skip_existing": "目标已存在时跳过",
+        "overwrite_existing": "目标已存在时覆盖",
+        "fix_checked": "修复勾选项",
+        "copy_checked": "复制勾选项",
+        "move_checked": "移动勾选项",
+        "select_all": "全选",
+        "invert_selection": "反选",
+        "clear_list": "清空列表",
+        "drop_hint": "支持拖拽 JPG/JPEG 文件或文件夹到列表区域",
+        "table_checked": "勾选",
+        "table_rel_path": "相对路径",
+        "table_size": "大小",
+        "table_meizu": "魅族",
+        "table_live": "实况",
+        "table_status": "状态",
+        "waiting_choose_dir": "等待选择目录",
+        "waiting_drop": "等待拖拽文件到列表",
+        "dialog_choose_output": "选择输出目录",
+        "open": "打开",
+        "open_folder": "打开所在目录",
+        "copy_path": "复制路径",
+        "system_context_menu": "系统右键菜单...",
+        "yes": "是",
+        "no": "否",
+        "busy_title": "正在处理",
+        "busy_content": "上一批拖拽仍在处理中，请稍候",
+        "parsing_drop": "正在解析拖拽文件...",
+        "adding_files": "正在添加文件 {done}/{total}",
+        "no_new_jpg": "未发现可新增 JPG/JPEG",
+        "no_new_title": "未新增",
+        "no_new_content": "拖入文件已全部存在于列表中或格式不支持",
+        "drop_done_status": "拖拽完成：新增 {added}/{total}，当前共 {count} 项",
+        "drop_done_title": "拖拽添加完成",
+        "added_count": "新增 {added}/{total}",
+        "list_cleared": "列表已清空",
+        "list_cleared_content": "列表已清空，等待拖拽文件",
+        "hint": "提示",
+        "select_export_first": "请先勾选要导出的照片",
+        "dialog_choose_export": "选择导出目录",
+        "copying": "复制中 {i}/{n}: {name}",
+        "moving": "移动中 {i}/{n}: {name}",
+        "export_done_status": "导出完成: 成功 {success} / 失败 {failed}",
+        "export_done_title": "导出完成",
+        "success_failed": "成功 {success} / 失败 {failed}",
+        "choose_output_first": "请先选择输出目录",
+        "no_fix_items": "勾选项中没有待修复照片",
+        "fixing": "修复中 {i}/{n}: {name} - {status}",
+        "fix_done_status": "完成: 成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
+        "fix_done_title": "修复完成",
+        "fix_done_content": "成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
+        "status_pending": "等待处理",
+        "status_fixed_compatible": "已修复兼容",
+        "status_not_meizu": "非魅族设备照片",
+        "status_static": "魅族普通静态图",
+        "status_skip_exists": "跳过(目标已存在)",
+        "status_fixing": "正在修复",
+        "status_fix_success": "修复成功",
+        "status_failed_prefix": "失败:",
+    },
+    "en": {
+        "app_title": "Meizu LivePhoto Fix",
+        "missing_dependency_title": "Missing dependency",
+        "header_title": "Meizu Flyme LivePhoto Compatibility Fix",
+        "header_subtitle": "Fix Motion Photos compatibility, then copy or move selected photos",
+        "language": "Language",
+        "output_placeholder": "Output folder (Pictures by default)",
+        "choose_output": "Choose output folder",
+        "output_dir": "Output folder",
+        "skip_existing": "Skip when target exists",
+        "overwrite_existing": "Overwrite when target exists",
+        "fix_checked": "Fix selected",
+        "copy_checked": "Copy selected",
+        "move_checked": "Move selected",
+        "select_all": "Select all",
+        "invert_selection": "Invert selection",
+        "clear_list": "Clear list",
+        "drop_hint": "Drag JPG/JPEG files or folders into the list",
+        "table_checked": "Selected",
+        "table_rel_path": "Relative path",
+        "table_size": "Size",
+        "table_meizu": "Meizu",
+        "table_live": "Live",
+        "table_status": "Status",
+        "waiting_choose_dir": "Waiting for output folder",
+        "waiting_drop": "Drop files into the list",
+        "dialog_choose_output": "Choose output folder",
+        "open": "Open",
+        "open_folder": "Show in folder",
+        "copy_path": "Copy path",
+        "system_context_menu": "System context menu...",
+        "yes": "Yes",
+        "no": "No",
+        "busy_title": "Processing",
+        "busy_content": "The previous drop batch is still being processed. Please wait.",
+        "parsing_drop": "Analyzing dropped files...",
+        "adding_files": "Adding files {done}/{total}",
+        "no_new_jpg": "No new JPG/JPEG files found",
+        "no_new_title": "No files added",
+        "no_new_content": "All dropped files already exist in the list or use an unsupported format.",
+        "drop_done_status": "Drop complete: added {added}/{total}, {count} items total",
+        "drop_done_title": "Drop complete",
+        "added_count": "Added {added}/{total}",
+        "list_cleared": "List cleared",
+        "list_cleared_content": "The list is empty. Drop files to continue.",
+        "hint": "Notice",
+        "select_export_first": "Select photos to export first.",
+        "dialog_choose_export": "Choose export folder",
+        "copying": "Copying {i}/{n}: {name}",
+        "moving": "Moving {i}/{n}: {name}",
+        "export_done_status": "Export complete: {success} succeeded / {failed} failed",
+        "export_done_title": "Export complete",
+        "success_failed": "{success} succeeded / {failed} failed",
+        "choose_output_first": "Choose an output folder first.",
+        "no_fix_items": "No selected photos need fixing.",
+        "fixing": "Fixing {i}/{n}: {name} - {status}",
+        "fix_done_status": "Complete: {success} succeeded / {failed} failed / {skipped} skipped",
+        "fix_done_title": "Fix complete",
+        "fix_done_content": "{success} succeeded / {failed} failed / {skipped} skipped",
+        "status_pending": "Pending",
+        "status_fixed_compatible": "Already compatible",
+        "status_not_meizu": "Not a Meizu photo",
+        "status_static": "Meizu static photo",
+        "status_skip_exists": "Skipped (target exists)",
+        "status_fixing": "Fixing",
+        "status_fix_success": "Fixed",
+        "status_failed_prefix": "Failed:",
+    },
+}
+
+
 def _pick_icon(*names: str):
     for name in names:
         icon = getattr(FluentIcon, name, None)
@@ -240,7 +381,10 @@ def _pick_icon(*names: str):
 class MainWindow(FramelessMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"Meizu LivePhoto Fix")
+        self.lang = "zh"
+        self._last_status_key = "waiting_choose_dir"
+        self._last_status_kwargs = {}
+        self.setWindowTitle(self.tr("app_title"))
         self.resize(1280, 860)
         self._title_bar_height = 36
         self._set_blue_title_bar()
@@ -253,7 +397,7 @@ class MainWindow(FramelessMainWindow):
         try:
             self.engine = LivePhotoFixTool()
         except FileNotFoundError as e:
-            QMessageBox.critical(self, "依赖缺失", str(e))
+            QMessageBox.critical(self, self.tr("missing_dependency_title"), str(e))
             raise
 
         root = QWidget(self)
@@ -267,17 +411,27 @@ class MainWindow(FramelessMainWindow):
         header_layout.setContentsMargins(18, 16, 18, 16)
         header_layout.setSpacing(4)
 
-        title = SubtitleLabel("魅族Flyme实况图LivePhoto兼容修复", self)
+        self.title_label = SubtitleLabel(self.tr("header_title"), self)
         title_font = QFont("Segoe UI", 15)
         title_font.setBold(True)
-        title.setFont(title_font)
+        self.title_label.setFont(title_font)
 
-        subtitle = BodyLabel("修复兼容MotionPhotos支持，支持复制或移动导出", self)
-        subtitle.setStyleSheet("color: #667085;")
+        self.subtitle_label = BodyLabel(self.tr("header_subtitle"), self)
+        self.subtitle_label.setStyleSheet("color: #667085;")
 
+        self.language_label = BodyLabel(self.tr("language"), self)
+        self.language_combo = QComboBox(self)
+        self.language_combo.addItem("中文", "zh")
+        self.language_combo.addItem("English", "en")
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
+        language_row = QHBoxLayout()
+        language_row.addStretch(1)
+        language_row.addWidget(self.language_label)
+        language_row.addWidget(self.language_combo)
 
-        header_layout.addWidget(title)
-        header_layout.addWidget(subtitle)
+        header_layout.addWidget(self.title_label)
+        header_layout.addWidget(self.subtitle_label)
+        header_layout.addLayout(language_row)
 
         path_card = CardWidget(self)
         path_layout = QVBoxLayout(path_card)
@@ -288,12 +442,13 @@ class MainWindow(FramelessMainWindow):
         row2.setSpacing(10)
         self.output_edit = LineEdit(self)
         self.output_edit.setReadOnly(True)
-        self.output_edit.setPlaceholderText("输出目录（默认图片目录）")
-        btn_output = PushButton("选择输出目录", self)
-        btn_output.clicked.connect(self.choose_output)
-        row2.addWidget(BodyLabel("输出目录", self))
+        self.output_edit.setPlaceholderText(self.tr("output_placeholder"))
+        self.btn_output = PushButton(self.tr("choose_output"), self)
+        self.btn_output.clicked.connect(self.choose_output)
+        self.output_label = BodyLabel(self.tr("output_dir"), self)
+        row2.addWidget(self.output_label)
         row2.addWidget(self.output_edit, 1)
-        row2.addWidget(btn_output)
+        row2.addWidget(self.btn_output)
 
         path_layout.addLayout(row2)
 
@@ -304,8 +459,8 @@ class MainWindow(FramelessMainWindow):
 
         row3 = QHBoxLayout()
         row3.setSpacing(12)
-        self.skip_radio = RadioButton("目标已存在时跳过", self)
-        self.overwrite_radio = RadioButton("目标已存在时覆盖", self)
+        self.skip_radio = RadioButton(self.tr("skip_existing"), self)
+        self.overwrite_radio = RadioButton(self.tr("overwrite_existing"), self)
         self.skip_radio.setChecked(True)
         row3.addStretch(1)
         row3.addWidget(self.skip_radio)
@@ -319,34 +474,34 @@ class MainWindow(FramelessMainWindow):
 
         row4 = QHBoxLayout()
         row4.setSpacing(8)
-        btn_fix = PrimaryPushButton("修复勾选项", self)
-        btn_fix.clicked.connect(self.fix_checked)
+        self.btn_fix = PrimaryPushButton(self.tr("fix_checked"), self)
+        self.btn_fix.clicked.connect(self.fix_checked)
 
-        btn_copy = PushButton("复制勾选项", self)
-        btn_copy.clicked.connect(lambda: self.export_checked("copy"))
+        self.btn_copy = PushButton(self.tr("copy_checked"), self)
+        self.btn_copy.clicked.connect(lambda: self.export_checked("copy"))
 
-        btn_move = PushButton("移动勾选项", self)
-        btn_move.clicked.connect(lambda: self.export_checked("move"))
+        self.btn_move = PushButton(self.tr("move_checked"), self)
+        self.btn_move.clicked.connect(lambda: self.export_checked("move"))
 
-        btn_all = ToolButton(_pick_icon("SELECT_ALL", "CHECKBOX", "ACCEPT"), self)
-        btn_all.setToolTip("全选")
-        btn_all.clicked.connect(self.select_all_rows)
+        self.btn_all = ToolButton(_pick_icon("SELECT_ALL", "CHECKBOX", "ACCEPT"), self)
+        self.btn_all.setToolTip(self.tr("select_all"))
+        self.btn_all.clicked.connect(self.select_all_rows)
 
-        btn_invert = ToolButton(_pick_icon("SYNC", "SWITCH", "UPDATE"), self)
-        btn_invert.setToolTip("反选")
-        btn_invert.clicked.connect(self.invert_rows)
+        self.btn_invert = ToolButton(_pick_icon("SYNC", "SWITCH", "UPDATE"), self)
+        self.btn_invert.setToolTip(self.tr("invert_selection"))
+        self.btn_invert.clicked.connect(self.invert_rows)
 
-        btn_clear = PushButton("清空列表", self)
-        btn_clear.clicked.connect(self.clear_list)
+        self.btn_clear = PushButton(self.tr("clear_list"), self)
+        self.btn_clear.clicked.connect(self.clear_list)
 
         row4.addStretch(1)
-        row4.addWidget(btn_fix)
-        row4.addWidget(btn_copy)
-        row4.addWidget(btn_move)
+        row4.addWidget(self.btn_fix)
+        row4.addWidget(self.btn_copy)
+        row4.addWidget(self.btn_move)
         row4.addSpacing(8)
-        row4.addWidget(btn_all)
-        row4.addWidget(btn_invert)
-        row4.addWidget(btn_clear)
+        row4.addWidget(self.btn_all)
+        row4.addWidget(self.btn_invert)
+        row4.addWidget(self.btn_clear)
         action_layout.addLayout(row4)
 
         table_card = CardWidget(self)
@@ -354,12 +509,12 @@ class MainWindow(FramelessMainWindow):
         table_layout.setContentsMargins(10, 10, 10, 10)
         table_layout.setSpacing(8)
 
-        self.drop_hint = BodyLabel("支持拖拽 JPG/JPEG 文件或文件夹到列表区域", self)
+        self.drop_hint = BodyLabel(self.tr("drop_hint"), self)
         self.drop_hint.setStyleSheet("color: #6b7280; padding: 4px 6px;")
 
         self.table = TableWidget(self)
         self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["勾选", "相对路径", "大小", "魅族", "实况", "状态"])
+        self.table.setHorizontalHeaderLabels(self._table_headers())
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
@@ -398,7 +553,7 @@ class MainWindow(FramelessMainWindow):
         self.progress.setFixedHeight(14)
         self.progress.setMinimumWidth(280)
         self.progress.setMaximumWidth(420)
-        self.status = BodyLabel("等待选择目录", self)
+        self.status = BodyLabel(self.tr("waiting_choose_dir"), self)
         self.status.setStyleSheet("color: #475467;")
         foot_layout.addStretch(1)
         foot_layout.addWidget(self.progress, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -412,6 +567,62 @@ class MainWindow(FramelessMainWindow):
         outer.addWidget(foot_card)
         self._init_default_output_dir()
         self._sync_title_bar()
+
+    def tr(self, key: str, **kwargs) -> str:
+        text = TRANSLATIONS.get(self.lang, TRANSLATIONS["zh"]).get(key, key)
+        return text.format(**kwargs) if kwargs else text
+
+    def _table_headers(self) -> list[str]:
+        return [
+            self.tr("table_checked"),
+            self.tr("table_rel_path"),
+            self.tr("table_size"),
+            self.tr("table_meizu"),
+            self.tr("table_live"),
+            self.tr("table_status"),
+        ]
+
+    def _set_status_text(self, key: str, **kwargs):
+        self._last_status_key = key
+        self._last_status_kwargs = kwargs
+        self.status.setText(self.tr(key, **kwargs))
+
+    def _display_status(self, status: str) -> str:
+        key = status
+        if key is not None:
+            return self.tr(key)
+        failed_prefix = "失败:"
+        if status.startswith(failed_prefix):
+            return f"{self.tr('status_failed_prefix')} {status[len(failed_prefix):].strip()}"
+        return status
+
+    def _on_language_changed(self, _index: int):
+        lang = self.language_combo.currentData()
+        if lang not in TRANSLATIONS or lang == self.lang:
+            return
+        self.lang = lang
+        self._apply_language()
+
+    def _apply_language(self):
+        self.setWindowTitle(self.tr("app_title"))
+        self.title_label.setText(self.tr("header_title"))
+        self.subtitle_label.setText(self.tr("header_subtitle"))
+        self.language_label.setText(self.tr("language"))
+        self.output_edit.setPlaceholderText(self.tr("output_placeholder"))
+        self.btn_output.setText(self.tr("choose_output"))
+        self.output_label.setText(self.tr("output_dir"))
+        self.skip_radio.setText(self.tr("skip_existing"))
+        self.overwrite_radio.setText(self.tr("overwrite_existing"))
+        self.btn_fix.setText(self.tr("fix_checked"))
+        self.btn_copy.setText(self.tr("copy_checked"))
+        self.btn_move.setText(self.tr("move_checked"))
+        self.btn_all.setToolTip(self.tr("select_all"))
+        self.btn_invert.setToolTip(self.tr("invert_selection"))
+        self.btn_clear.setText(self.tr("clear_list"))
+        self.drop_hint.setText(self.tr("drop_hint"))
+        self.table.setHorizontalHeaderLabels(self._table_headers())
+        self._set_status_text(self._last_status_key, **self._last_status_kwargs)
+        self._refresh_table()
 
     def _cell_checkbox(self, row: int) -> CheckBox | None:
         wrap = self.table.cellWidget(row, 0)
@@ -501,10 +712,10 @@ class MainWindow(FramelessMainWindow):
         except Exception:
             pass
         self.output_edit.setText(str(base))
-        self.status.setText("等待拖拽文件到列表")
+        self._set_status_text("waiting_drop")
 
     def choose_output(self):
-        path = QFileDialog.getExistingDirectory(self, "选择输出目录")
+        path = QFileDialog.getExistingDirectory(self, self.tr("dialog_choose_output"))
         if path:
             Path(path).mkdir(parents=True, exist_ok=True)
             self.output_edit.setText(path)
@@ -523,7 +734,7 @@ class MainWindow(FramelessMainWindow):
         for row in range(self.table.rowCount()):
             cb = self._cell_checkbox(row)
             if isinstance(cb, CheckBox) and cb.property("item_id") == item_id:
-                self.table.setItem(row, 5, QTableWidgetItem(status))
+                self.table.setItem(row, 5, QTableWidgetItem(self._display_status(status)))
                 return
 
     def _item_from_row(self, row: int) -> PhotoItem | None:
@@ -616,13 +827,13 @@ class MainWindow(FramelessMainWindow):
             return False
 
     def _fallback_file_menu(self, menu: QMenu, path: Path):
-        act_open = menu.addAction("打开")
+        act_open = menu.addAction(self.tr("open"))
         act_open.triggered.connect(lambda: subprocess.run(["cmd", "/c", "start", "", str(path)], check=False))
 
-        act_reveal = menu.addAction("打开所在目录")
+        act_reveal = menu.addAction(self.tr("open_folder"))
         act_reveal.triggered.connect(lambda: subprocess.run(["explorer", "/select,", str(path)], check=False))
 
-        act_copy_path = menu.addAction("复制路径")
+        act_copy_path = menu.addAction(self.tr("copy_path"))
         act_copy_path.triggered.connect(lambda: QApplication.clipboard().setText(str(path)))
 
     def _show_table_context_menu(self, pos):
@@ -636,7 +847,7 @@ class MainWindow(FramelessMainWindow):
         global_pos = self.table.viewport().mapToGlobal(pos)
         menu = QMenu(self)
         if sys.platform == "win32":
-            act_shell = menu.addAction("系统右键菜单...")
+            act_shell = menu.addAction(self.tr("system_context_menu"))
             act_shell.triggered.connect(lambda: self._show_explorer_context_menu([file_path], global_pos))
             menu.addSeparator()
 
@@ -698,9 +909,9 @@ class MainWindow(FramelessMainWindow):
             self.table.setCellWidget(row, 0, cb_wrap)
             self.table.setItem(row, 1, QTableWidgetItem(str(item.rel_path)))
             self.table.setItem(row, 2, QTableWidgetItem(item.size_str))
-            self.table.setItem(row, 3, QTableWidgetItem("是" if item.is_meizu else "否"))
-            self.table.setItem(row, 4, QTableWidgetItem("是" if item.is_live else "否"))
-            self.table.setItem(row, 5, QTableWidgetItem(item.status))
+            self.table.setItem(row, 3, QTableWidgetItem(self.tr("yes") if item.is_meizu else self.tr("no")))
+            self.table.setItem(row, 4, QTableWidgetItem(self.tr("yes") if item.is_live else self.tr("no")))
+            self.table.setItem(row, 5, QTableWidgetItem(self._display_status(item.status)))
         self.table.setSortingEnabled(True)
 
     def _current_existing_paths(self) -> set[Path]:
@@ -714,10 +925,10 @@ class MainWindow(FramelessMainWindow):
 
     def _start_drop_worker(self, paths: list[Path]):
         if self._drop_thread is not None and self._drop_thread.isRunning():
-            self._notify("正在处理", "上一批拖拽仍在处理中，请稍候", is_error=True)
+            self._notify(self.tr("busy_title"), self.tr("busy_content"), is_error=True)
             return
 
-        self.status.setText("正在解析拖拽文件...")
+        self._set_status_text("parsing_drop")
         self.progress.setRange(0, 0)
 
         self._drop_thread = QThread(self)
@@ -741,17 +952,17 @@ class MainWindow(FramelessMainWindow):
         QApplication.processEvents()
 
     def _on_drop_progress(self, done: int, total: int, _stage: str):
-        self.status.setText(f"正在添加文件 {done}/{total}")
+        self._set_status_text("adding_files", done=done, total=total)
 
     def _on_drop_finished(self, added: int, total: int):
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         if total == 0:
-            self.status.setText("未发现可新增 JPG/JPEG")
-            self._notify("未新增", "拖入文件已全部存在于列表中或格式不支持", is_error=True)
+            self._set_status_text("no_new_jpg")
+            self._notify(self.tr("no_new_title"), self.tr("no_new_content"), is_error=True)
         else:
-            self.status.setText(f"拖拽完成：新增 {added}/{total}，当前共 {len(self.items)} 项")
-            self._notify("拖拽添加完成", f"新增 {added}/{total}")
+            self._set_status_text("drop_done_status", added=added, total=total, count=len(self.items))
+            self._notify(self.tr("drop_done_title"), self.tr("added_count", added=added, total=total))
         self._drop_worker = None
         self._drop_thread = None
 
@@ -759,8 +970,8 @@ class MainWindow(FramelessMainWindow):
         self.items.clear()
         self.table.setRowCount(0)
         self.progress.setValue(0)
-        self.status.setText("列表已清空")
-        self._notify("已清空", "列表已清空，等待拖拽文件")
+        self._set_status_text("list_cleared")
+        self._notify(self.tr("list_cleared"), self.tr("list_cleared_content"))
 
     def select_all_rows(self):
         for row in range(self.table.rowCount()):
@@ -777,33 +988,34 @@ class MainWindow(FramelessMainWindow):
     def export_checked(self, action: str):
         selected = self._selected_items()
         if not selected:
-            QMessageBox.warning(self, "提示", "请先勾选要导出的照片")
+            QMessageBox.warning(self, self.tr("hint"), self.tr("select_export_first"))
             return
 
-        target = QFileDialog.getExistingDirectory(self, "选择导出目录")
+        target = QFileDialog.getExistingDirectory(self, self.tr("dialog_choose_export"))
         if not target:
             return
 
         def progress_cb(i, n, item):
             self.progress.setValue(int(i * 100 / n))
-            self.status.setText(f"{'复制' if action == 'copy' else '移动'}中 {i}/{n}: {item.rel_path.name}")
+            key = "copying" if action == "copy" else "moving"
+            self._set_status_text(key, i=i, n=n, name=item.rel_path.name)
             QApplication.processEvents()
 
         s, f = export_items(selected, Path(target), action, progress_cb)
         self.progress.setValue(100)
-        self.status.setText(f"导出完成: 成功 {s} / 失败 {f}")
-        self._notify("导出完成", f"成功 {s} / 失败 {f}")
+        self._set_status_text("export_done_status", success=s, failed=f)
+        self._notify(self.tr("export_done_title"), self.tr("success_failed", success=s, failed=f))
         self._refresh_table()
 
     def fix_checked(self):
         dst = self.output_edit.text().strip()
         if not dst:
-            QMessageBox.warning(self, "提示", "请先选择输出目录")
+            QMessageBox.warning(self, self.tr("hint"), self.tr("choose_output_first"))
             return
 
         selected = [x for x in self._selected_items() if x.needs_process]
         if not selected:
-            QMessageBox.warning(self, "提示", "勾选项中没有待修复照片")
+            QMessageBox.warning(self, self.tr("hint"), self.tr("no_fix_items"))
             return
 
         exist_action = "skip" if self.skip_radio.isChecked() else "overwrite"
@@ -811,13 +1023,13 @@ class MainWindow(FramelessMainWindow):
         def progress_cb(i, n, item, st):
             self.progress.setValue(int(i * 100 / n))
             self._set_row_status(item.item_id, st)
-            self.status.setText(f"修复中 {i}/{n}: {item.rel_path.name} - {st}")
+            self._set_status_text("fixing", i=i, n=n, name=item.rel_path.name, status=self._display_status(st))
             QApplication.processEvents()
 
         s, skip, f = fix_items(self.engine, selected, Path(dst), exist_action, progress_cb)
         self.progress.setValue(100)
-        self.status.setText(f"完成: 成功 {s} / 失败 {f} / 冲突跳过 {skip}")
-        self._notify("修复完成", f"成功 {s} / 失败 {f} / 冲突跳过 {skip}")
+        self._set_status_text("fix_done_status", success=s, failed=f, skipped=skip)
+        self._notify(self.tr("fix_done_title"), self.tr("fix_done_content", success=s, failed=f, skipped=skip))
         self._refresh_table()
 
 
