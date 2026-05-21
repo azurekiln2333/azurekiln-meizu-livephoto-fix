@@ -36,6 +36,8 @@ python -m venv .venv
 pip install PyQt6 PyQt6-Fluent-Widgets pywin32
 ```
 
+ExifTool 官網：<https://exiftool.org/>
+
 `ExifTool` 需要能被程式找到。當前程式碼會優先查找這些位置：
 
 - `vendor/exiftool/exiftool.exe`
@@ -48,6 +50,21 @@ pip install PyQt6 PyQt6-Fluent-Widgets pywin32
 ```powershell
 .\.venv\Scripts\python.exe .\main_gui.py
 ```
+
+## 構建命令
+
+如需將 GUI 與倉庫內建的 `ExifTool` 一起打包，可執行：
+
+```powershell
+pip install pyinstaller
+pyinstaller --noconfirm --clean --windowed --name FlymeLivePhotoFix `
+  --collect-all qfluentwidgets `
+  --collect-all qframelesswindow `
+  --add-data "vendor/exiftool;exiftool" `
+  .\main_gui.py
+```
+
+構建完成後，產物預設輸出到 `dist/FlymeLivePhotoFix/`。
 
 ## 使用說明
 
