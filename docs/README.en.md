@@ -1,7 +1,6 @@
 ﻿# Flyme LivePhoto Fix
 
-Default documentation language: Chinese.
-Chinese documentation: `../README.md`
+[中文](../README.md) | [English](README.en.md)
 
 ## Overview
 

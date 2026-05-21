@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 import sys
 import importlib
 import subprocess
@@ -8,8 +9,19 @@ import ctypes
 from pathlib import Path
 from uuid import uuid4
 
-from main_gui_logic import PhotoItem, export_items, fix_items, format_size
-from flyme_livephoto_fix_core import LivePhotoFixTool, check_photo_type
+from main_gui_logic import (
+    ITEM_KIND_FIXED_LIVE,
+    ITEM_KIND_MEIZU_STATIC,
+    ITEM_KIND_OTHER_FILE,
+    ITEM_KIND_OTHER_PHOTO,
+    ITEM_KIND_PENDING_LIVE,
+    PhotoItem,
+    classify_item,
+    default_status_for_kind,
+    export_items,
+    output_items,
+)
+from flyme_livephoto_fix_core import LivePhotoFixTool
 from qframelesswindow import FramelessMainWindow, StandardTitleBar
 
 from PyQt6.QtCore import QEvent, QObject, QThread, Qt, pyqtSignal, QRect, QItemSelectionModel, QPoint, QTimer
@@ -31,6 +43,7 @@ from PyQt6.QtWidgets import (
 )
 
 QT_BINDING = "PyQt6"
+APP_NAME = "FlymeLivePhotoFix"
 
 if sys.platform == "win32":
     import win32con  # type: ignore
@@ -69,6 +82,14 @@ def _get_windows_pictures_dir() -> Path | None:
         return None
 
 
+def _get_settings_path() -> Path:
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / APP_NAME / "settings.json"
+    return Path.home() / ".config" / APP_NAME / "settings.json"
+
+
 class DropScanWorker(QObject):
     batch_ready = pyqtSignal(object)
     progress = pyqtSignal(int, int, str)
@@ -80,11 +101,11 @@ class DropScanWorker(QObject):
         self.existing = existing
         self.scan_subdirs = scan_subdirs
 
-    def _iter_jpg_files(self) -> list[Path]:
-        files: list[Path] = []
+    def _iter_files(self) -> list[tuple[Path, Path | None]]:
+        files: list[tuple[Path, Path | None]] = []
         for p in self.paths:
-            if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg"}:
-                files.append(p)
+            if p.is_file():
+                files.append((p, p.parent))
                 continue
             if not p.is_dir():
                 continue
@@ -93,50 +114,51 @@ class DropScanWorker(QObject):
                     for root, _dirs, names in os.walk(p):
                         base = Path(root)
                         for name in names:
-                            if name.lower().endswith((".jpg", ".jpeg")):
-                                files.append(base / name)
+                            files.append((base / name, p))
                 else:
                     for child in p.iterdir():
-                        if child.is_file() and child.suffix.lower() in {".jpg", ".jpeg"}:
-                            files.append(child)
+                        if child.is_file():
+                            files.append((child, p))
             except Exception:
                 continue
-        return sorted(set(files), key=lambda x: str(x))
+        dedup: dict[str, tuple[Path, Path | None]] = {}
+        for file_path, root in files:
+            try:
+                key = str(file_path.resolve())
+            except Exception:
+                key = str(file_path)
+            dedup[key] = (file_path, root)
+        return [dedup[k] for k in sorted(dedup, key=lambda x: x)]
 
-    def _build_item(self, jpg_path: Path) -> PhotoItem:
-        try:
-            size_str = format_size(jpg_path.stat().st_size)
-            is_meizu, is_live, is_fixed = check_photo_type(jpg_path)
-        except Exception:
-            size_str, is_meizu, is_live, is_fixed = "?", False, False, False
-
-        needs_process = is_live and not is_fixed
-        if needs_process:
-            status = "status_pending"
-        elif is_fixed:
-            status = "status_fixed_compatible"
-        elif not is_meizu:
-            status = "status_not_meizu"
+    def _build_item(self, file_path: Path, source_root: Path | None) -> PhotoItem:
+        size_str, item_kind, is_meizu, is_live, is_fixed, needs_process = classify_item(file_path)
+        if source_root is not None:
+            try:
+                rel_path = file_path.relative_to(source_root)
+            except ValueError:
+                rel_path = Path(file_path.name)
         else:
-            status = "status_static"
+            rel_path = Path(file_path.name)
 
         return PhotoItem(
             item_id=f"drop_{uuid4().hex}",
-            jpg_path=jpg_path,
-            rel_path=Path(jpg_path.name),
+            jpg_path=file_path,
+            source_root=source_root,
+            rel_path=rel_path,
             size_str=size_str,
+            item_kind=item_kind,
             is_meizu=is_meizu,
             is_live=is_live,
             is_fixed=is_fixed,
             needs_process=needs_process,
-            status=status,
+            status=default_status_for_kind(item_kind),
         )
 
     def run(self):
-        all_files = self._iter_jpg_files()
-        candidates: list[Path] = []
+        all_files = self._iter_files()
+        candidates: list[tuple[Path, Path | None]] = []
         seen = set()
-        for p in all_files:
+        for p, root in all_files:
             try:
                 rp = p.resolve()
             except Exception:
@@ -144,7 +166,7 @@ class DropScanWorker(QObject):
             if rp in self.existing or rp in seen:
                 continue
             seen.add(rp)
-            candidates.append(p)
+            candidates.append((p, root))
 
         total = len(candidates)
         if total == 0:
@@ -153,8 +175,8 @@ class DropScanWorker(QObject):
 
         batch: list[PhotoItem] = []
         added = 0
-        for idx, p in enumerate(candidates, start=1):
-            batch.append(self._build_item(p))
+        for idx, (p, root) in enumerate(candidates, start=1):
+            batch.append(self._build_item(p, root))
             added += 1
             if len(batch) >= 12:
                 self.batch_ready.emit(batch)
@@ -244,14 +266,21 @@ TRANSLATIONS = {
         "missing_dependency_title": "依赖缺失",
         "header_title": "魅族Flyme实况图LivePhoto兼容修复",
         "header_subtitle": "修复兼容MotionPhotos支持，支持复制或移动导出",
+        "header_note": "基于 ExifTool",
         "language": "界面语言",
         "output_placeholder": "输出目录（默认图片目录）",
         "choose_output": "选择输出目录",
         "output_dir": "输出目录",
+        "output_settings": "输出设置",
         "scan_subdirs": "扫描子目录",
+        "include_fixed_live": "处理好的动态照片",
+        "include_static": "Flyme静态照片",
+        "include_other_photo": "其他相机/手机照片",
+        "include_other_file": "其他文件",
+        "output_note": "勾选后会输出；待处理动态照片会自动修复后输出",
         "skip_existing": "目标已存在时跳过",
         "overwrite_existing": "目标已存在时覆盖",
-        "fix_checked": "修复勾选项",
+        "fix_checked": "修复并输出",
         "pause_fix": "暂停",
         "resume_fix": "继续",
         "stop_fix": "停止",
@@ -260,7 +289,7 @@ TRANSLATIONS = {
         "select_all": "全选",
         "invert_selection": "反选",
         "clear_list": "清空列表",
-        "drop_hint": "支持拖拽 JPG/JPEG 文件或文件夹到列表区域",
+        "drop_hint": "将需要处理的文件拖入列表",
         "table_checked": "勾选",
         "table_rel_path": "相对路径",
         "table_size": "大小",
@@ -282,16 +311,17 @@ TRANSLATIONS = {
         "busy_content": "上一批拖拽仍在处理中，请稍候",
         "parsing_drop": "正在解析拖拽文件...",
         "adding_files": "正在添加文件 {done}/{total}",
-        "no_new_jpg": "未发现可新增 JPG/JPEG",
+        "no_new_jpg": "未发现可新增文件",
         "no_new_title": "未新增",
-        "no_new_content": "拖入文件已全部存在于列表中或格式不支持",
+        "no_new_content": "拖入文件已全部存在于列表中或已被过滤",
         "drop_done_status": "拖拽完成：新增 {added}/{total}，当前共 {count} 项",
         "drop_done_title": "拖拽添加完成",
         "added_count": "新增 {added}/{total}",
         "list_cleared": "列表已清空",
         "list_cleared_content": "列表已清空，等待拖拽文件",
         "hint": "提示",
-        "select_export_first": "请先勾选要导出的照片",
+        "select_export_first": "请先勾选要导出的文件",
+        "no_output_items": "勾选项中没有要输出的文件",
         "dialog_choose_export": "选择导出目录",
         "copying": "复制中 {i}/{n}: {name}",
         "moving": "移动中 {i}/{n}: {name}",
@@ -299,23 +329,26 @@ TRANSLATIONS = {
         "export_done_title": "导出完成",
         "success_failed": "成功 {success} / 失败 {failed}",
         "choose_output_first": "请先选择输出目录",
-        "no_fix_items": "勾选项中没有待修复照片",
-        "fixing": "修复中 {i}/{n}: {name} - {status}",
-        "fix_done_status": "完成: 成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
+        "no_fix_items": "勾选项中没有待输出文件",
+        "fixing": "输出中 {i}/{n}: {name} - {status}",
+        "fix_done_status": "输出完成: 成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
         "fix_stopped_status": "已停止: 成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
         "fix_paused_status": "已暂停，可继续或停止",
         "fix_stopping_status": "正在停止...",
-        "fix_done_title": "修复完成",
+        "fix_done_title": "输出完成",
         "fix_done_content": "成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
-        "fix_stopped_title": "修复已停止",
+        "fix_stopped_title": "输出已停止",
         "fix_stopped_content": "已停止本轮任务，成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
         "status_pending": "等待处理",
         "status_fixed_compatible": "已修复兼容",
         "status_not_meizu": "非魅族设备照片",
         "status_static": "魅族普通静态图",
+        "status_other_file": "其他文件",
         "status_skip_exists": "跳过(目标已存在)",
-        "status_fixing": "正在修复",
+        "status_fixing": "正在处理",
+        "status_copying": "正在复制",
         "status_fix_success": "修复成功",
+        "status_output_copy_success": "已输出副本",
         "status_failed_prefix": "失败:",
     },
     "en": {
@@ -323,14 +356,21 @@ TRANSLATIONS = {
         "missing_dependency_title": "Missing dependency",
         "header_title": "Meizu Flyme LivePhoto Compatibility Fix",
         "header_subtitle": "Fix Motion Photos compatibility, then copy or move selected photos",
+        "header_note": "Powered by ExifTool",
         "language": "Language",
         "output_placeholder": "Output folder (Pictures by default)",
         "choose_output": "Choose output folder",
         "output_dir": "Output folder",
+        "output_settings": "Output settings",
         "scan_subdirs": "Scan subfolders",
+        "include_fixed_live": "Processed live photos",
+        "include_static": "Flyme static photos",
+        "include_other_photo": "Other camera/phone photos",
+        "include_other_file": "Other files",
+        "output_note": "Checked types will be exported. Pending live photos are fixed automatically.",
         "skip_existing": "Skip when target exists",
         "overwrite_existing": "Overwrite when target exists",
-        "fix_checked": "Fix selected",
+        "fix_checked": "Fix and output",
         "pause_fix": "Pause",
         "resume_fix": "Resume",
         "stop_fix": "Stop",
@@ -339,7 +379,7 @@ TRANSLATIONS = {
         "select_all": "Select all",
         "invert_selection": "Invert selection",
         "clear_list": "Clear list",
-        "drop_hint": "Drag JPG/JPEG files or folders into the list",
+        "drop_hint": "Drag files to process into the list",
         "table_checked": "Selected",
         "table_rel_path": "Relative path",
         "table_size": "Size",
@@ -361,16 +401,17 @@ TRANSLATIONS = {
         "busy_content": "The previous drop batch is still being processed. Please wait.",
         "parsing_drop": "Analyzing dropped files...",
         "adding_files": "Adding files {done}/{total}",
-        "no_new_jpg": "No new JPG/JPEG files found",
+        "no_new_jpg": "No new files found",
         "no_new_title": "No files added",
-        "no_new_content": "All dropped files already exist in the list or use an unsupported format.",
+        "no_new_content": "All dropped files already exist in the list or were filtered out.",
         "drop_done_status": "Drop complete: added {added}/{total}, {count} items total",
         "drop_done_title": "Drop complete",
         "added_count": "Added {added}/{total}",
         "list_cleared": "List cleared",
         "list_cleared_content": "The list is empty. Drop files to continue.",
         "hint": "Notice",
-        "select_export_first": "Select photos to export first.",
+        "select_export_first": "Select files to export first.",
+        "no_output_items": "No checked files to output.",
         "dialog_choose_export": "Choose export folder",
         "copying": "Copying {i}/{n}: {name}",
         "moving": "Moving {i}/{n}: {name}",
@@ -378,23 +419,26 @@ TRANSLATIONS = {
         "export_done_title": "Export complete",
         "success_failed": "{success} succeeded / {failed} failed",
         "choose_output_first": "Choose an output folder first.",
-        "no_fix_items": "No selected photos need fixing.",
-        "fixing": "Fixing {i}/{n}: {name} - {status}",
-        "fix_done_status": "Complete: {success} succeeded / {failed} failed / {skipped} skipped",
+        "no_fix_items": "No selected files to output.",
+        "fixing": "Outputting {i}/{n}: {name} - {status}",
+        "fix_done_status": "Output complete: {success} succeeded / {failed} failed / {skipped} skipped",
         "fix_stopped_status": "Stopped: {success} succeeded / {failed} failed / {skipped} skipped",
         "fix_paused_status": "Paused. Resume or stop the run.",
         "fix_stopping_status": "Stopping...",
-        "fix_done_title": "Fix complete",
+        "fix_done_title": "Output complete",
         "fix_done_content": "{success} succeeded / {failed} failed / {skipped} skipped",
-        "fix_stopped_title": "Fix stopped",
+        "fix_stopped_title": "Output stopped",
         "fix_stopped_content": "This run was stopped. {success} succeeded / {failed} failed / {skipped} skipped",
         "status_pending": "Pending",
         "status_fixed_compatible": "Already compatible",
         "status_not_meizu": "Not a Meizu photo",
         "status_static": "Meizu static photo",
+        "status_other_file": "Other file",
         "status_skip_exists": "Skipped (target exists)",
-        "status_fixing": "Fixing",
+        "status_fixing": "Working",
+        "status_copying": "Copying",
         "status_fix_success": "Fixed",
+        "status_output_copy_success": "Copied to output",
         "status_failed_prefix": "Failed:",
     },
 }
@@ -423,6 +467,8 @@ class MainWindow(FramelessMainWindow):
         self._drop_thread: QThread | None = None
         self._drop_worker: DropScanWorker | None = None
         self._suspend_selection_sync = False
+        self._suspend_settings_save = False
+        self._settings_path = _get_settings_path()
         self._rubber_band_origin = None
         self._rubber_band_press_pos = None
         self._rubber_band_last_pos = None
@@ -449,18 +495,20 @@ class MainWindow(FramelessMainWindow):
         outer.setContentsMargins(20, self._title_bar_height + 12, 20, 18)
         outer.setSpacing(12)
 
-        header_card = CardWidget(self)
+        header_card = QWidget(self)
         header_layout = QVBoxLayout(header_card)
-        header_layout.setContentsMargins(18, 16, 18, 16)
+        header_layout.setContentsMargins(4, 6, 4, 10)
         header_layout.setSpacing(4)
 
         self.title_label = SubtitleLabel(self.tr("header_title"), self)
-        title_font = QFont("Segoe UI", 15)
+        title_font = QFont("Microsoft YaHei", 15)
         title_font.setBold(True)
         self.title_label.setFont(title_font)
 
         self.subtitle_label = BodyLabel(self.tr("header_subtitle"), self)
         self.subtitle_label.setStyleSheet("color: #667085;")
+        self.subtitle_note_label = BodyLabel(self.tr("header_note"), self)
+        self.subtitle_note_label.setStyleSheet("color: #98A2B3;")
 
         self.language_label = BodyLabel(self.tr("language"), self)
         self.language_combo = ComboBox(self)
@@ -475,6 +523,7 @@ class MainWindow(FramelessMainWindow):
 
         header_layout.addWidget(self.title_label)
         header_layout.addWidget(self.subtitle_label)
+        header_layout.addWidget(self.subtitle_note_label)
         header_layout.addLayout(language_row)
 
         path_card = CardWidget(self)
@@ -504,14 +553,9 @@ class MainWindow(FramelessMainWindow):
         row3 = QHBoxLayout()
         row3.setSpacing(12)
         self.scan_subdirs_check = CheckBox(self.tr("scan_subdirs"), self)
-        self.scan_subdirs_check.setChecked(True)
-        self.skip_radio = RadioButton(self.tr("skip_existing"), self)
-        self.overwrite_radio = RadioButton(self.tr("overwrite_existing"), self)
-        self.skip_radio.setChecked(True)
+        self.scan_subdirs_check.setChecked(False)
         row3.addWidget(self.scan_subdirs_check)
         row3.addStretch(1)
-        row3.addWidget(self.skip_radio)
-        row3.addWidget(self.overwrite_radio)
         option_layout.addLayout(row3)
 
         action_card = CardWidget(self)
@@ -525,10 +569,12 @@ class MainWindow(FramelessMainWindow):
         self.btn_fix.clicked.connect(self.fix_checked)
 
         self.btn_pause = PushButton(self.tr("pause_fix"), self)
+        self.btn_pause.setIcon(_pick_icon("PAUSE", "PAUSE_BOLD"))
         self.btn_pause.clicked.connect(self.toggle_fix_pause)
         self.btn_pause.setEnabled(False)
 
         self.btn_stop = PushButton(self.tr("stop_fix"), self)
+        self.btn_stop.setIcon(_pick_icon("CLOSE", "CANCEL", "REMOVE"))
         self.btn_stop.clicked.connect(self.stop_fix)
         self.btn_stop.setEnabled(False)
 
@@ -549,16 +595,12 @@ class MainWindow(FramelessMainWindow):
         self.btn_clear = PushButton(self.tr("clear_list"), self)
         self.btn_clear.clicked.connect(self.clear_list)
 
-        row4.addStretch(1)
-        row4.addWidget(self.btn_fix)
-        row4.addWidget(self.btn_pause)
-        row4.addWidget(self.btn_stop)
         row4.addWidget(self.btn_copy)
         row4.addWidget(self.btn_move)
-        row4.addSpacing(8)
-        row4.addWidget(self.btn_all)
-        row4.addWidget(self.btn_invert)
-        row4.addWidget(self.btn_clear)
+        row4.addStretch(1)
+        row4.addWidget(self.btn_pause)
+        row4.addWidget(self.btn_stop)
+        row4.addWidget(self.btn_fix)
         action_layout.addLayout(row4)
 
         table_card = CardWidget(self)
@@ -566,8 +608,15 @@ class MainWindow(FramelessMainWindow):
         table_layout.setContentsMargins(10, 10, 10, 10)
         table_layout.setSpacing(8)
 
+        hint_row = QHBoxLayout()
+        hint_row.setSpacing(8)
         self.drop_hint = BodyLabel(self.tr("drop_hint"), self)
         self.drop_hint.setStyleSheet("color: #6b7280; padding: 4px 6px;")
+        hint_row.addWidget(self.drop_hint)
+        hint_row.addStretch(1)
+        hint_row.addWidget(self.btn_all)
+        hint_row.addWidget(self.btn_invert)
+        hint_row.addWidget(self.btn_clear)
 
         self.table = TableWidget(self)
         self.table.setColumnCount(6)
@@ -603,8 +652,46 @@ class MainWindow(FramelessMainWindow):
         header.setMinimumSectionSize(56)
         self.table.verticalHeader().setDefaultSectionSize(36)
 
-        table_layout.addWidget(self.drop_hint)
+        table_layout.addLayout(hint_row)
         table_layout.addWidget(self.table)
+
+        output_card = CardWidget(self)
+        output_layout = QVBoxLayout(output_card)
+        output_layout.setContentsMargins(16, 14, 16, 14)
+        output_layout.setSpacing(8)
+        self.output_settings_label = BodyLabel(self.tr("output_settings"), self)
+        self.output_settings_label.setStyleSheet("font-weight: 600;")
+        output_layout.addWidget(self.output_settings_label)
+
+        exist_row = QHBoxLayout()
+        exist_row.setSpacing(12)
+        self.skip_radio = RadioButton(self.tr("skip_existing"), self)
+        self.overwrite_radio = RadioButton(self.tr("overwrite_existing"), self)
+        self.skip_radio.setChecked(True)
+        exist_row.addWidget(self.skip_radio)
+        exist_row.addWidget(self.overwrite_radio)
+        exist_row.addStretch(1)
+        output_layout.addLayout(exist_row)
+
+        output_flags_row = QHBoxLayout()
+        output_flags_row.setSpacing(12)
+        self.output_fixed_live_check = CheckBox(self.tr("include_fixed_live"), self)
+        self.output_static_check = CheckBox(self.tr("include_static"), self)
+        self.output_other_photo_check = CheckBox(self.tr("include_other_photo"), self)
+        self.output_other_file_check = CheckBox(self.tr("include_other_file"), self)
+        self.output_fixed_live_check.setChecked(True)
+        self.output_static_check.setChecked(True)
+        self.output_other_photo_check.setChecked(True)
+        self.output_other_file_check.setChecked(True)
+        output_flags_row.addWidget(self.output_fixed_live_check)
+        output_flags_row.addWidget(self.output_static_check)
+        output_flags_row.addWidget(self.output_other_photo_check)
+        output_flags_row.addWidget(self.output_other_file_check)
+        output_flags_row.addStretch(1)
+        output_layout.addLayout(output_flags_row)
+        self.output_settings_note = BodyLabel(self.tr("output_note"), self)
+        self.output_settings_note.setStyleSheet("color: #6b7280;")
+        output_layout.addWidget(self.output_settings_note)
 
         foot_card = CardWidget(self)
         foot_layout = QHBoxLayout(foot_card)
@@ -626,9 +713,13 @@ class MainWindow(FramelessMainWindow):
         outer.addWidget(path_card)
         outer.addWidget(option_card)
         outer.addWidget(table_card, 1)
+        outer.addWidget(output_card)
         outer.addWidget(action_card)
         outer.addWidget(foot_card)
         self._init_default_output_dir()
+        self._load_settings()
+        self._apply_language()
+        self._connect_settings_signals()
         self._sync_title_bar()
 
     def tr(self, key: str, **kwargs) -> str:
@@ -653,11 +744,101 @@ class MainWindow(FramelessMainWindow):
     def _display_status(self, status: str) -> str:
         key = status
         if key is not None:
-            return self.tr(key)
+            translated = self.tr(key)
+            if translated != key or key.startswith("status_"):
+                return translated
         failed_prefix = "失败:"
         if status.startswith(failed_prefix):
             return f"{self.tr('status_failed_prefix')} {status[len(failed_prefix):].strip()}"
+        failed_prefix_en = "Failed:"
+        if status.startswith(failed_prefix_en):
+            return f"{self.tr('status_failed_prefix')} {status[len(failed_prefix_en):].strip()}"
         return status
+
+    def _is_output_enabled_for_item(self, item: PhotoItem) -> bool:
+        if item.needs_process:
+            return True
+        if item.item_kind == ITEM_KIND_FIXED_LIVE:
+            return self.output_fixed_live_check.isChecked()
+        if item.item_kind == ITEM_KIND_MEIZU_STATIC:
+            return self.output_static_check.isChecked()
+        if item.item_kind == ITEM_KIND_OTHER_PHOTO:
+            return self.output_other_photo_check.isChecked()
+        if item.item_kind == ITEM_KIND_OTHER_FILE:
+            return self.output_other_file_check.isChecked()
+        return False
+
+    def _selected_output_items(self) -> list[PhotoItem]:
+        return [item for item in self._selected_items() if self._is_output_enabled_for_item(item)]
+
+    def _settings_payload(self) -> dict:
+        return {
+            "language": self.lang,
+            "output_dir": self.output_edit.text().strip(),
+            "scan_subdirs": self.scan_subdirs_check.isChecked(),
+            "exist_action": "skip" if self.skip_radio.isChecked() else "overwrite",
+            "include_fixed_live": self.output_fixed_live_check.isChecked(),
+            "include_static": self.output_static_check.isChecked(),
+            "include_other_photo": self.output_other_photo_check.isChecked(),
+            "include_other_file": self.output_other_file_check.isChecked(),
+        }
+
+    def _save_settings(self):
+        if self._suspend_settings_save:
+            return
+        try:
+            self._settings_path.parent.mkdir(parents=True, exist_ok=True)
+            self._settings_path.write_text(
+                json.dumps(self._settings_payload(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _load_settings(self):
+        if not self._settings_path.exists():
+            return
+        try:
+            data = json.loads(self._settings_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+
+        self._suspend_settings_save = True
+        try:
+            lang = data.get("language")
+            if lang in TRANSLATIONS:
+                self.lang = lang
+                for idx in range(self.language_combo.count()):
+                    if self.language_combo.itemData(idx) == lang:
+                        self.language_combo.setCurrentIndex(idx)
+                        break
+
+            output_dir = str(data.get("output_dir", "")).strip()
+            if output_dir:
+                self.output_edit.setText(output_dir)
+
+            self.scan_subdirs_check.setChecked(bool(data.get("scan_subdirs", self.scan_subdirs_check.isChecked())))
+            exist_action = data.get("exist_action", "skip")
+            self.skip_radio.setChecked(exist_action != "overwrite")
+            self.overwrite_radio.setChecked(exist_action == "overwrite")
+            self.output_fixed_live_check.setChecked(bool(data.get("include_fixed_live", True)))
+            self.output_static_check.setChecked(bool(data.get("include_static", True)))
+            self.output_other_photo_check.setChecked(bool(data.get("include_other_photo", True)))
+            self.output_other_file_check.setChecked(bool(data.get("include_other_file", True)))
+        finally:
+            self._suspend_settings_save = False
+
+    def _connect_settings_signals(self):
+        for widget in (
+            self.scan_subdirs_check,
+            self.skip_radio,
+            self.overwrite_radio,
+            self.output_fixed_live_check,
+            self.output_static_check,
+            self.output_other_photo_check,
+            self.output_other_file_check,
+        ):
+            widget.toggled.connect(lambda _checked=False: self._save_settings())
 
     def _on_language_changed(self, _index: int):
         lang = self.language_combo.currentData()
@@ -665,15 +846,23 @@ class MainWindow(FramelessMainWindow):
             return
         self.lang = lang
         self._apply_language()
+        self._save_settings()
 
     def _apply_language(self):
         self.setWindowTitle(self.tr("app_title"))
         self.title_label.setText(self.tr("header_title"))
         self.subtitle_label.setText(self.tr("header_subtitle"))
+        self.subtitle_note_label.setText(self.tr("header_note"))
         self.language_label.setText(self.tr("language"))
         self.output_edit.setPlaceholderText(self.tr("output_placeholder"))
         self.btn_output.setText(self.tr("choose_output"))
         self.output_label.setText(self.tr("output_dir"))
+        self.output_settings_label.setText(self.tr("output_settings"))
+        self.output_fixed_live_check.setText(self.tr("include_fixed_live"))
+        self.output_static_check.setText(self.tr("include_static"))
+        self.output_other_photo_check.setText(self.tr("include_other_photo"))
+        self.output_other_file_check.setText(self.tr("include_other_file"))
+        self.output_settings_note.setText(self.tr("output_note"))
         self.scan_subdirs_check.setText(self.tr("scan_subdirs"))
         self.skip_radio.setText(self.tr("skip_existing"))
         self.overwrite_radio.setText(self.tr("overwrite_existing"))
@@ -687,6 +876,8 @@ class MainWindow(FramelessMainWindow):
         self.btn_clear.setText(self.tr("clear_list"))
         self.drop_hint.setText(self.tr("drop_hint"))
         self.table.setHorizontalHeaderLabels(self._table_headers())
+        self.btn_pause.setIcon(_pick_icon("PLAY", "PLAY_SOLID") if self._fix_paused else _pick_icon("PAUSE", "PAUSE_BOLD"))
+        self.btn_stop.setIcon(_pick_icon("CLOSE", "CANCEL", "REMOVE"))
         self._set_status_text(self._last_status_key, **self._last_status_kwargs)
         self._refresh_table()
 
@@ -700,21 +891,32 @@ class MainWindow(FramelessMainWindow):
     def _set_blue_title_bar(self):
         self.setTitleBar(StandardTitleBar(self))
         self._title_bar_height = self.titleBar.height()
+        self.titleBar.setObjectName("blueTitleBar")
         self.titleBar.setStyleSheet(
             """
-            QWidget {
+            QWidget#blueTitleBar {
                 background: #1677FF;
             }
-            QLabel {
+            QWidget#blueTitleBar QLabel {
                 color: #FFFFFF;
                 background: transparent;
             }
             """
         )
-        for btn in (self.titleBar.minBtn, self.titleBar.maxBtn, self.titleBar.closeBtn):
+        for btn in (self.titleBar.minBtn, self.titleBar.maxBtn):
+            btn.setNormalColor("#1F2937")
+            btn.setHoverColor("#1F2937")
+            btn.setPressedColor("#1F2937")
             btn.setNormalBackgroundColor("#00000000")
-            btn.setHoverBackgroundColor("#33FFFFFF")
-            btn.setPressedBackgroundColor("#55FFFFFF")
+            btn.setHoverBackgroundColor("#4DFFFFFF")
+            btn.setPressedBackgroundColor("#80FFFFFF")
+
+        self.titleBar.closeBtn.setNormalColor("#1F2937")
+        self.titleBar.closeBtn.setHoverColor("#FFFFFF")
+        self.titleBar.closeBtn.setPressedColor("#FFFFFF")
+        self.titleBar.closeBtn.setNormalBackgroundColor("#00000000")
+        self.titleBar.closeBtn.setHoverBackgroundColor("#E81123")
+        self.titleBar.closeBtn.setPressedBackgroundColor("#F1707A")
 
     def _sync_title_bar(self):
         if not hasattr(self, "titleBar"):
@@ -895,7 +1097,7 @@ class MainWindow(FramelessMainWindow):
 
     def _init_default_output_dir(self):
         pics_dir = _get_windows_pictures_dir() or (Path.home() / "Pictures")
-        base = pics_dir / "FlymeLivePhotoFix"
+        base = pics_dir / "FlymeLivePhotoFix_output"
         try:
             base.mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -908,16 +1110,18 @@ class MainWindow(FramelessMainWindow):
         if path:
             Path(path).mkdir(parents=True, exist_ok=True)
             self.output_edit.setText(path)
+            self._save_settings()
 
     def _auto_set_output_dir_from_drop(self, paths: list[Path]):
         drop_dirs = [p for p in paths if p.is_dir()]
         if not drop_dirs:
             return
         # If multiple folders are dropped, use the first one as the output base.
-        target = drop_dirs[0] / "FlymeLivePhotoFix"
+        target = drop_dirs[0] / "FlymeLivePhotoFix_output"
         try:
             target.mkdir(parents=True, exist_ok=True)
             self.output_edit.setText(str(target))
+            self._save_settings()
         except Exception:
             return
 
@@ -1246,7 +1450,7 @@ class MainWindow(FramelessMainWindow):
         self.table.setRowCount(len(rows))
         for row, item in enumerate(rows):
             cb = CheckBox(self.table)
-            cb.setChecked(item.needs_process)
+            cb.setChecked(True)
             cb.setProperty("item_id", item.item_id)
             cb_wrap = QWidget(self.table)
             cb_layout = QHBoxLayout(cb_wrap)
@@ -1258,8 +1462,10 @@ class MainWindow(FramelessMainWindow):
             self.table.setCellWidget(row, 0, cb_wrap)
             self.table.setItem(row, 1, QTableWidgetItem(str(item.rel_path)))
             self.table.setItem(row, 2, QTableWidgetItem(item.size_str))
-            self.table.setItem(row, 3, QTableWidgetItem(self.tr("yes") if item.is_meizu else self.tr("no")))
-            self.table.setItem(row, 4, QTableWidgetItem(self.tr("yes") if item.is_live else self.tr("no")))
+            meizu_text = "" if item.item_kind == ITEM_KIND_OTHER_FILE else (self.tr("yes") if item.is_meizu else self.tr("no"))
+            live_text = "" if item.item_kind == ITEM_KIND_OTHER_FILE else (self.tr("yes") if item.is_live else self.tr("no"))
+            self.table.setItem(row, 3, QTableWidgetItem(meizu_text))
+            self.table.setItem(row, 4, QTableWidgetItem(live_text))
             self.table.setItem(row, 5, QTableWidgetItem(self._display_status(item.status)))
         self.table.setSortingEnabled(True)
 
@@ -1340,6 +1546,11 @@ class MainWindow(FramelessMainWindow):
         self.btn_copy.setEnabled(not running)
         self.btn_move.setEnabled(not running)
         self.btn_output.setEnabled(not running)
+        self.output_fixed_live_check.setEnabled(not running)
+        self.output_static_check.setEnabled(not running)
+        self.output_other_photo_check.setEnabled(not running)
+        self.output_other_file_check.setEnabled(not running)
+        self.scan_subdirs_check.setEnabled(not running)
         self.skip_radio.setEnabled(not running)
         self.overwrite_radio.setEnabled(not running)
         self.btn_all.setEnabled(not running)
@@ -1347,16 +1558,19 @@ class MainWindow(FramelessMainWindow):
         self.btn_clear.setEnabled(not running)
         if running:
             self.btn_pause.setText(self.tr("pause_fix"))
+            self.btn_pause.setIcon(_pick_icon("PAUSE", "PAUSE_BOLD"))
         else:
             self._fix_paused = False
             self._fix_stop_requested = False
             self.btn_pause.setText(self.tr("pause_fix"))
+            self.btn_pause.setIcon(_pick_icon("PAUSE", "PAUSE_BOLD"))
 
     def toggle_fix_pause(self):
         if not self._fix_running:
             return
         self._fix_paused = not self._fix_paused
         self.btn_pause.setText(self.tr("resume_fix") if self._fix_paused else self.tr("pause_fix"))
+        self.btn_pause.setIcon(_pick_icon("PLAY", "PLAY_SOLID") if self._fix_paused else _pick_icon("PAUSE", "PAUSE_BOLD"))
         if self._fix_paused:
             self._set_status_text("fix_paused_status")
 
@@ -1382,7 +1596,7 @@ class MainWindow(FramelessMainWindow):
         def progress_cb(i, n, item):
             self.progress.setValue(int(i * 100 / n))
             key = "copying" if action == "copy" else "moving"
-            self._set_status_text(key, i=i, n=n, name=item.rel_path.name)
+            self._set_status_text(key, i=i, n=n, name=str(item.rel_path))
             QApplication.processEvents()
 
         s, f = export_items(selected, Path(target), action, progress_cb)
@@ -1400,9 +1614,9 @@ class MainWindow(FramelessMainWindow):
             QMessageBox.warning(self, self.tr("hint"), self.tr("choose_output_first"))
             return
 
-        selected = [x for x in self._selected_items() if x.needs_process]
+        selected = self._selected_output_items()
         if not selected:
-            QMessageBox.warning(self, self.tr("hint"), self.tr("no_fix_items"))
+            QMessageBox.warning(self, self.tr("hint"), self.tr("no_output_items"))
             return
 
         exist_action = "skip" if self.skip_radio.isChecked() else "overwrite"
@@ -1410,7 +1624,7 @@ class MainWindow(FramelessMainWindow):
         def progress_cb(i, n, item, st):
             self.progress.setValue(int(i * 100 / n))
             self._set_row_status(item.item_id, st)
-            self._set_status_text("fixing", i=i, n=n, name=item.rel_path.name, status=self._display_status(st))
+            self._set_status_text("fixing", i=i, n=n, name=str(item.rel_path), status=self._display_status(st))
             QApplication.processEvents()
 
         def should_pause():
@@ -1427,7 +1641,7 @@ class MainWindow(FramelessMainWindow):
         self._set_fix_running_state(True)
 
         try:
-            s, skip, f = fix_items(
+            s, skip, f = output_items(
                 self.engine,
                 selected,
                 Path(dst),
@@ -1453,7 +1667,7 @@ class MainWindow(FramelessMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setFont(QFont("Segoe UI", 10))
+    app.setFont(QFont("Microsoft YaHei", 10))
     setThemeColor("#1677FF")
     setTheme(Theme.LIGHT)
 

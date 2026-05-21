@@ -7,13 +7,21 @@ from typing import Callable
 
 from flyme_livephoto_fix_core import LivePhotoFixTool, check_photo_type
 
+ITEM_KIND_PENDING_LIVE = "pending_live"
+ITEM_KIND_FIXED_LIVE = "fixed_live"
+ITEM_KIND_MEIZU_STATIC = "meizu_static"
+ITEM_KIND_OTHER_PHOTO = "other_photo"
+ITEM_KIND_OTHER_FILE = "other_file"
+
 
 @dataclass
 class PhotoItem:
     item_id: str
     jpg_path: Path
+    source_root: Path | None
     rel_path: Path
     size_str: str
+    item_kind: str
     is_meizu: bool
     is_live: bool
     is_fixed: bool
@@ -27,55 +35,84 @@ def format_size(size: int) -> str:
     return f"{size / (1024 * 1024):.1f} MB"
 
 
-def _iter_jpg_files(input_dir: Path, include_subdirs: bool):
-    patterns = ("*.jpg", "*.jpeg", "*.JPG", "*.JPEG")
-    for pattern in patterns:
-        if include_subdirs:
-            yield from input_dir.rglob(pattern)
-        else:
-            yield from input_dir.glob(pattern)
+def classify_item(file_path: Path) -> tuple[str, str, bool, bool, bool, bool]:
+    try:
+        size_str = format_size(file_path.stat().st_size)
+    except Exception:
+        size_str = "?"
+
+    suffix = file_path.suffix.lower()
+    if suffix not in {".jpg", ".jpeg"}:
+        return size_str, ITEM_KIND_OTHER_FILE, False, False, False, False
+
+    try:
+        is_meizu, is_live, is_fixed = check_photo_type(file_path)
+    except Exception:
+        is_meizu, is_live, is_fixed = False, False, False
+
+    needs_process = is_live and not is_fixed
+    if needs_process:
+        item_kind = ITEM_KIND_PENDING_LIVE
+    elif is_fixed:
+        item_kind = ITEM_KIND_FIXED_LIVE
+    elif is_meizu:
+        item_kind = ITEM_KIND_MEIZU_STATIC
+    else:
+        item_kind = ITEM_KIND_OTHER_PHOTO
+    return size_str, item_kind, is_meizu, is_live, is_fixed, needs_process
+
+
+def default_status_for_kind(item_kind: str) -> str:
+    if item_kind == ITEM_KIND_PENDING_LIVE:
+        return "status_pending"
+    if item_kind == ITEM_KIND_FIXED_LIVE:
+        return "status_fixed_compatible"
+    if item_kind == ITEM_KIND_MEIZU_STATIC:
+        return "status_static"
+    if item_kind == ITEM_KIND_OTHER_PHOTO:
+        return "status_not_meizu"
+    return "status_other_file"
+
+
+def _iter_files(input_dir: Path, include_subdirs: bool):
+    if include_subdirs:
+        for path in input_dir.rglob("*"):
+            if path.is_file():
+                yield path
+        return
+    for path in input_dir.iterdir():
+        if path.is_file():
+            yield path
 
 
 def scan_photo_items(input_dir: Path, include_subdirs: bool = True) -> list[PhotoItem]:
     if not input_dir.is_dir():
         return []
 
-    jpg_files = set(_iter_jpg_files(input_dir, include_subdirs))
+    jpg_files = set(_iter_files(input_dir, include_subdirs))
     items: list[PhotoItem] = []
 
     for idx, jpg_path in enumerate(sorted(jpg_files, key=lambda p: str(p))):
-        try:
-            size_str = format_size(jpg_path.stat().st_size)
-            is_meizu, is_live, is_fixed = check_photo_type(jpg_path)
-        except Exception:
-            size_str, is_meizu, is_live, is_fixed = "?", False, False, False
+        size_str, item_kind, is_meizu, is_live, is_fixed, needs_process = classify_item(jpg_path)
 
         try:
             rel_path = jpg_path.relative_to(input_dir)
         except ValueError:
             rel_path = Path(jpg_path.name)
 
-        needs_process = is_live and not is_fixed
-        if needs_process:
-            status = "等待处理"
-        elif is_fixed:
-            status = "已修复兼容"
-        elif not is_meizu:
-            status = "非魅族设备照片"
-        else:
-            status = "魅族普通静态图"
-
         items.append(
             PhotoItem(
                 item_id=f"item_{idx}",
                 jpg_path=jpg_path,
+                source_root=input_dir,
                 rel_path=rel_path,
                 size_str=size_str,
+                item_kind=item_kind,
                 is_meizu=is_meizu,
                 is_live=is_live,
                 is_fixed=is_fixed,
                 needs_process=needs_process,
-                status=status,
+                status=default_status_for_kind(item_kind),
             )
         )
 
@@ -113,6 +150,104 @@ def export_items(
     return success, failed
 
 
+def output_items(
+    engine: LivePhotoFixTool,
+    items: list[PhotoItem],
+    output_dir: Path,
+    exist_action: str,
+    progress_cb: Callable[[int, int, PhotoItem, str], None] | None = None,
+    should_pause: Callable[[], bool] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    idle_cb: Callable[[], None] | None = None,
+) -> tuple[int, int, int]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    success_count = 0
+    skipped_exists_count = 0
+    fail_count = 0
+    total = len(items)
+
+    for idx, item in enumerate(items, start=1):
+        while should_pause and should_pause():
+            if should_stop and should_stop():
+                return success_count, skipped_exists_count, fail_count
+            if idle_cb:
+                idle_cb()
+
+        if should_stop and should_stop():
+            return success_count, skipped_exists_count, fail_count
+
+        output_file = output_dir / item.rel_path
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            same_file = output_file.exists() and output_file.resolve() == item.jpg_path.resolve()
+        except Exception:
+            same_file = False
+
+        if item.needs_process:
+            if output_file.exists() and not same_file:
+                if exist_action == "skip":
+                    skipped_exists_count += 1
+                    item.status = "status_skip_exists"
+                    if progress_cb:
+                        progress_cb(idx, total, item, item.status)
+                    continue
+                try:
+                    output_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            item.status = "status_fixing"
+            if progress_cb:
+                progress_cb(idx, total, item, item.status)
+
+            ok, msg = engine.fix_photo(item.jpg_path, output_file)
+            if ok:
+                success_count += 1
+                item.needs_process = False
+                item.is_fixed = True
+                item.item_kind = ITEM_KIND_FIXED_LIVE
+                item.status = "status_fix_success"
+            else:
+                fail_count += 1
+                item.status = f"失败: {msg[:40]}"
+        else:
+            if same_file:
+                skipped_exists_count += 1
+                item.status = "status_skip_exists"
+                if progress_cb:
+                    progress_cb(idx, total, item, item.status)
+                continue
+            if output_file.exists():
+                if exist_action == "skip":
+                    skipped_exists_count += 1
+                    item.status = "status_skip_exists"
+                    if progress_cb:
+                        progress_cb(idx, total, item, item.status)
+                    continue
+                try:
+                    output_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            item.status = "status_copying"
+            if progress_cb:
+                progress_cb(idx, total, item, item.status)
+            try:
+                shutil.copy2(item.jpg_path, output_file)
+                success_count += 1
+                item.status = "status_output_copy_success"
+            except Exception as e:
+                fail_count += 1
+                item.status = f"失败: {str(e)[:40]}"
+
+        if progress_cb:
+            progress_cb(idx, total, item, item.status)
+
+    return success_count, skipped_exists_count, fail_count
+
+
 def fix_items(
     engine: LivePhotoFixTool,
     items: list[PhotoItem],
@@ -146,7 +281,7 @@ def fix_items(
         if output_file.exists() and output_file.resolve() != item.jpg_path.resolve():
             if exist_action == "skip":
                 skipped_exists_count += 1
-                item.status = "跳过(目标已存在)"
+                item.status = "status_skip_exists"
                 if progress_cb:
                     progress_cb(idx, total, item, item.status)
                 continue
@@ -155,7 +290,7 @@ def fix_items(
             except Exception:
                 pass
 
-        item.status = "正在修复"
+        item.status = "status_fixing"
         if progress_cb:
             progress_cb(idx, total, item, item.status)
 
@@ -164,7 +299,7 @@ def fix_items(
             success_count += 1
             item.needs_process = False
             item.is_fixed = True
-            item.status = "修复成功"
+            item.status = "status_fix_success"
         else:
             fail_count += 1
             item.status = f"失败: {msg[:40]}"
