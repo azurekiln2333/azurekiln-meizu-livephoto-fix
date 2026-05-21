@@ -17,7 +17,6 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QAbstractItemView,
-    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -193,6 +192,7 @@ def _import_fluent():
         "PrimaryPushButton": module.PrimaryPushButton,
         "PushButton": module.PushButton,
         "LineEdit": module.LineEdit,
+        "ComboBox": module.ComboBox,
         "TableWidget": module.TableWidget,
         "ProgressBar": module.ProgressBar,
         "CheckBox": module.CheckBox,
@@ -215,6 +215,7 @@ setTheme = FW["set_theme"]
 PrimaryPushButton = FW["PrimaryPushButton"]
 PushButton = FW["PushButton"]
 LineEdit = FW["LineEdit"]
+ComboBox = FW["ComboBox"]
 TableWidget = FW["TableWidget"]
 ProgressBar = FW["ProgressBar"]
 CheckBox = FW["CheckBox"]
@@ -420,9 +421,10 @@ class MainWindow(FramelessMainWindow):
         self.subtitle_label.setStyleSheet("color: #667085;")
 
         self.language_label = BodyLabel(self.tr("language"), self)
-        self.language_combo = QComboBox(self)
+        self.language_combo = ComboBox(self)
         self.language_combo.addItem("中文", "zh")
         self.language_combo.addItem("English", "en")
+        self.language_combo.setFixedWidth(128)
         self.language_combo.currentIndexChanged.connect(self._on_language_changed)
         language_row = QHBoxLayout()
         language_row.addStretch(1)
