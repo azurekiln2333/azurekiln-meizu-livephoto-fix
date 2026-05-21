@@ -216,6 +216,7 @@ class MainWindow(FramelessMainWindow):
         self.items: dict[str, PhotoItem] = {}
         self._drop_thread: QThread | None = None
         self._drop_worker: DropScanWorker | None = None
+        self._suspend_selection_sync = False
 
         try:
             self.engine = LivePhotoFixTool()
@@ -446,8 +447,19 @@ class MainWindow(FramelessMainWindow):
 
     def _on_header_sort_clicked(self, _logical_index: int):
         # Keep checkbox state as-is, only clear visual row selection highlight.
+        self._suspend_selection_sync = True
         self.table.clearSelection()
         self.table.setCurrentCell(-1, -1)
+        self._suspend_selection_sync = False
+
+    def _sync_checks_to_selection(self):
+        if self._suspend_selection_sync:
+            return
+        selected_rows = {idx.row() for idx in self.table.selectionModel().selectedRows()}
+        for row in range(self.table.rowCount()):
+            cb = self._cell_checkbox(row)
+            if isinstance(cb, CheckBox):
+                cb.setChecked(row in selected_rows)
 
     def _init_default_output_dir(self):
         base = Path.home() / "Pictures" / "FlymeLivePhotoFix"
@@ -615,6 +627,9 @@ class MainWindow(FramelessMainWindow):
             if event.type() == QEvent.Type.ContextMenu:
                 self._show_table_context_menu(event.pos())
                 return True
+            if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                self._sync_checks_to_selection()
+                return False
             if event.type() == QEvent.Type.DragEnter:
                 if event.mimeData().hasUrls():
                     event.acceptProposedAction()
