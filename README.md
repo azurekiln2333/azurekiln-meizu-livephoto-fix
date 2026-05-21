@@ -1,6 +1,6 @@
 # Flyme LivePhoto Fix
 
-[中文](README.md) | [English](docs/README.en.md)
+简体中文 | [繁體中文](docs/README.zh-TW.md) | [English](docs/README.en.md)
 
 基于 `PyQt6 + qfluentwidgets + ExifTool` 的 Windows 桌面工具，用于批量修复魅族 Flyme 实况照片的 Motion Photos 兼容性，并按分类输出文件。
 

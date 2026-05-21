@@ -1,34 +1,32 @@
-﻿# Flyme LivePhoto Fix
+# Flyme LivePhoto Fix
 
-[中文](../README.md) | [English](README.en.md)
+[简体中文](../README.md) | [繁體中文](README.zh-TW.md) | English
 
-## Overview
+Windows desktop tool built with `PyQt6 + qfluentwidgets + ExifTool` for batch-fixing Motion Photos compatibility of Meizu Flyme live photos and exporting files by category.
 
-This desktop tool (built with `PyQt6 + qfluentwidgets`) helps batch-fix compatibility issues for Meizu LivePhoto images.
+## Current Features
 
-Main capabilities:
-
-- Drag-and-drop import for `JPG/JPEG` files and folders
-- Batch fix selected items
-- Batch copy/move selected items
-- Right-click context actions per item
-
-## Key Features
-
-- PyQt6-only Qt stack
-- Blue immersive title bar
-- Asynchronous drag-drop parsing (background worker)
-- Mouse drag multi-selection with a blue rubber-band box
-- Clickable header sorting
-- Sorting clears row highlight only (checkbox states remain unchanged)
-- Default output directory:
-  - `~/Pictures/FlymeLivePhotoFix`
-  - Auto-created if missing
+- Drag files or folders into the list and scan them asynchronously
+- Optional subdirectory scanning
+- Automatically classify files as:
+  - Flyme live photos pending processing
+  - Already processed live photos
+  - Flyme static photos
+  - Other camera/phone photos
+  - Other files
+- Checked items can be fixed and output in one step
+- Non-pending live photos can be copied directly to the output folder
+- Output settings support enabling or disabling each category
+- Support skipping or overwriting when the target already exists
+- Support right-click actions, copy file, cut file, and copy path
+- Support blue drag selection box, auto-scroll drag selection, and sorting
+- Automatically save configuration to local `settings.json`
 
 ## Requirements
 
-- Windows 10/11 (recommended)
+- Windows 10/11
 - Python 3.10+
+- `exiftool.exe`
 
 ## Installation
 
@@ -38,7 +36,14 @@ python -m venv .venv
 pip install PyQt6 PyQt6-Fluent-Widgets pywin32
 ```
 
-## Run
+`ExifTool` must be discoverable by the application. The current code checks these locations first:
+
+- `vendor/exiftool/exiftool.exe`
+- `exiftool/exiftool.exe`
+- `bin/exiftool.exe`
+- `exiftool` from the system environment
+
+## Launch
 
 ```powershell
 .\.venv\Scripts\python.exe .\main_gui.py
@@ -46,27 +51,48 @@ pip install PyQt6 PyQt6-Fluent-Widgets pywin32
 
 ## Usage
 
-1. Start the app and verify output directory.
-2. Drag image files/folders into the list.
-3. Select items to process (drag-added items are checked by default).
-4. Use bottom actions:
-   - Fix selected
-   - Copy selected
-   - Move selected
-5. Right-click an item for quick actions or open Windows system context menu.
+1. Start the application and confirm the output directory. The default path is `~/Pictures/FlymeLivePhotoFix_output`.
+2. Drag files or folders to process into the list.
+3. Decide whether to enable `Scan subdirectories`.
+4. In `Output settings`, choose which file categories should be output and whether existing targets should be skipped or overwritten.
+5. Check the items that should participate in the operation. Newly dropped items are checked by default.
+6. Click `Fix and output`:
+   - Pending Flyme live photos are fixed through `ExifTool` and then written to the output folder
+   - Other enabled categories are copied directly to the output folder
+7. If you only want to export currently checked items, you can still use `Copy selected` or `Move selected`.
 
 ## Interaction Notes
 
-- Checkbox state controls processing/export participation.
-- Row highlight is visual selection only.
-- Sorting clears row highlight but keeps checkbox states unchanged.
+- The right side of the list header provides `Select all / Invert / Clear list`
+- Checkboxes determine whether an item participates in output or export
+- Row highlight is only a visual selection state and is independent from the checkbox state
+- A blue rubber-band box is supported for drag selection, and the list auto-scrolls near the edges
+- Right-clicking a file can quickly open it, locate it, copy its path, or open the system context menu
+
+## Configuration File
+
+The application automatically saves these settings:
+
+- UI language
+- Output directory
+- Whether subdirectories are scanned
+- Output category toggles
+- Skip or overwrite behavior when the target already exists
+
+On Windows, the default path is:
+
+```text
+%APPDATA%\FlymeLivePhotoFix\settings.json
+```
 
 ## Core Files
 
-- `main_gui.py`: UI and interaction layer
-- `main_gui_logic.py`: batch processing/export logic
-- `flyme_livephoto_fix_core.py`: detection/fix core
+- `main_gui.py`: main window and interaction logic
+- `main_gui_logic.py`: classification, output, and fix workflow
+- `flyme_livephoto_fix_core.py`: `ExifTool`-based detection and fix core
+- `README.md`: Simplified Chinese documentation
+- `docs/README.zh-TW.md`: Traditional Chinese documentation
 
 ## License
 
-See repository `LICENSE`.
+This project is distributed under the `LICENSE` file in this repository.
