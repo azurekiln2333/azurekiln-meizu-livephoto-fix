@@ -119,6 +119,9 @@ def fix_items(
     output_dir: Path,
     exist_action: str,
     progress_cb: Callable[[int, int, PhotoItem, str], None] | None = None,
+    should_pause: Callable[[], bool] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    idle_cb: Callable[[], None] | None = None,
 ) -> tuple[int, int, int]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -128,6 +131,15 @@ def fix_items(
     total = len(items)
 
     for idx, item in enumerate(items, start=1):
+        while should_pause and should_pause():
+            if should_stop and should_stop():
+                return success_count, skipped_exists_count, fail_count
+            if idle_cb:
+                idle_cb()
+
+        if should_stop and should_stop():
+            return success_count, skipped_exists_count, fail_count
+
         output_file = output_dir / item.rel_path
         output_file.parent.mkdir(parents=True, exist_ok=True)
 

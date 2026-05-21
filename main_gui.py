@@ -244,6 +244,9 @@ TRANSLATIONS = {
         "skip_existing": "目标已存在时跳过",
         "overwrite_existing": "目标已存在时覆盖",
         "fix_checked": "修复勾选项",
+        "pause_fix": "暂停",
+        "resume_fix": "继续",
+        "stop_fix": "停止",
         "copy_checked": "复制勾选项",
         "move_checked": "移动勾选项",
         "select_all": "全选",
@@ -289,8 +292,13 @@ TRANSLATIONS = {
         "no_fix_items": "勾选项中没有待修复照片",
         "fixing": "修复中 {i}/{n}: {name} - {status}",
         "fix_done_status": "完成: 成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
+        "fix_stopped_status": "已停止: 成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
+        "fix_paused_status": "已暂停，可继续或停止",
+        "fix_stopping_status": "正在停止...",
         "fix_done_title": "修复完成",
         "fix_done_content": "成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
+        "fix_stopped_title": "修复已停止",
+        "fix_stopped_content": "已停止本轮任务，成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
         "status_pending": "等待处理",
         "status_fixed_compatible": "已修复兼容",
         "status_not_meizu": "非魅族设备照片",
@@ -312,6 +320,9 @@ TRANSLATIONS = {
         "skip_existing": "Skip when target exists",
         "overwrite_existing": "Overwrite when target exists",
         "fix_checked": "Fix selected",
+        "pause_fix": "Pause",
+        "resume_fix": "Resume",
+        "stop_fix": "Stop",
         "copy_checked": "Copy selected",
         "move_checked": "Move selected",
         "select_all": "Select all",
@@ -357,8 +368,13 @@ TRANSLATIONS = {
         "no_fix_items": "No selected photos need fixing.",
         "fixing": "Fixing {i}/{n}: {name} - {status}",
         "fix_done_status": "Complete: {success} succeeded / {failed} failed / {skipped} skipped",
+        "fix_stopped_status": "Stopped: {success} succeeded / {failed} failed / {skipped} skipped",
+        "fix_paused_status": "Paused. Resume or stop the run.",
+        "fix_stopping_status": "Stopping...",
         "fix_done_title": "Fix complete",
         "fix_done_content": "{success} succeeded / {failed} failed / {skipped} skipped",
+        "fix_stopped_title": "Fix stopped",
+        "fix_stopped_content": "This run was stopped. {success} succeeded / {failed} failed / {skipped} skipped",
         "status_pending": "Pending",
         "status_fixed_compatible": "Already compatible",
         "status_not_meizu": "Not a Meizu photo",
@@ -394,6 +410,9 @@ class MainWindow(FramelessMainWindow):
         self._drop_thread: QThread | None = None
         self._drop_worker: DropScanWorker | None = None
         self._suspend_selection_sync = False
+        self._fix_running = False
+        self._fix_paused = False
+        self._fix_stop_requested = False
 
         try:
             self.engine = LivePhotoFixTool()
@@ -479,6 +498,14 @@ class MainWindow(FramelessMainWindow):
         self.btn_fix = PrimaryPushButton(self.tr("fix_checked"), self)
         self.btn_fix.clicked.connect(self.fix_checked)
 
+        self.btn_pause = PushButton(self.tr("pause_fix"), self)
+        self.btn_pause.clicked.connect(self.toggle_fix_pause)
+        self.btn_pause.setEnabled(False)
+
+        self.btn_stop = PushButton(self.tr("stop_fix"), self)
+        self.btn_stop.clicked.connect(self.stop_fix)
+        self.btn_stop.setEnabled(False)
+
         self.btn_copy = PushButton(self.tr("copy_checked"), self)
         self.btn_copy.clicked.connect(lambda: self.export_checked("copy"))
 
@@ -498,6 +525,8 @@ class MainWindow(FramelessMainWindow):
 
         row4.addStretch(1)
         row4.addWidget(self.btn_fix)
+        row4.addWidget(self.btn_pause)
+        row4.addWidget(self.btn_stop)
         row4.addWidget(self.btn_copy)
         row4.addWidget(self.btn_move)
         row4.addSpacing(8)
@@ -616,6 +645,8 @@ class MainWindow(FramelessMainWindow):
         self.skip_radio.setText(self.tr("skip_existing"))
         self.overwrite_radio.setText(self.tr("overwrite_existing"))
         self.btn_fix.setText(self.tr("fix_checked"))
+        self.btn_pause.setText(self.tr("resume_fix") if self._fix_paused else self.tr("pause_fix"))
+        self.btn_stop.setText(self.tr("stop_fix"))
         self.btn_copy.setText(self.tr("copy_checked"))
         self.btn_move.setText(self.tr("move_checked"))
         self.btn_all.setToolTip(self.tr("select_all"))
@@ -721,6 +752,18 @@ class MainWindow(FramelessMainWindow):
         if path:
             Path(path).mkdir(parents=True, exist_ok=True)
             self.output_edit.setText(path)
+
+    def _auto_set_output_dir_from_drop(self, paths: list[Path]):
+        drop_dirs = [p for p in paths if p.is_dir()]
+        if not drop_dirs:
+            return
+        # If multiple folders are dropped, use the first one as the output base.
+        target = drop_dirs[0] / "FlymeLivePhotoFix"
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            self.output_edit.setText(str(target))
+        except Exception:
+            return
 
     def _selected_items(self) -> list[PhotoItem]:
         selected: list[PhotoItem] = []
@@ -888,6 +931,7 @@ class MainWindow(FramelessMainWindow):
                 urls = event.mimeData().urls()
                 paths = [Path(url.toLocalFile()) for url in urls if url.isLocalFile()]
                 if paths:
+                    self._auto_set_output_dir_from_drop(paths)
                     self._start_drop_worker(paths)
                     event.acceptProposedAction()
                     return True
@@ -947,8 +991,6 @@ class MainWindow(FramelessMainWindow):
 
     def _on_drop_batch_ready(self, batch):
         for item in batch:
-            item.needs_process = True
-        for item in batch:
             self.items[item.item_id] = item
         self._refresh_table()
         QApplication.processEvents()
@@ -987,6 +1029,43 @@ class MainWindow(FramelessMainWindow):
             if isinstance(cb, CheckBox):
                 cb.setChecked(not cb.isChecked())
 
+    def _set_fix_running_state(self, running: bool):
+        self._fix_running = running
+        self.btn_fix.setEnabled(not running)
+        self.btn_pause.setEnabled(running)
+        self.btn_stop.setEnabled(running)
+        self.btn_copy.setEnabled(not running)
+        self.btn_move.setEnabled(not running)
+        self.btn_output.setEnabled(not running)
+        self.skip_radio.setEnabled(not running)
+        self.overwrite_radio.setEnabled(not running)
+        self.btn_all.setEnabled(not running)
+        self.btn_invert.setEnabled(not running)
+        self.btn_clear.setEnabled(not running)
+        if running:
+            self.btn_pause.setText(self.tr("pause_fix"))
+        else:
+            self._fix_paused = False
+            self._fix_stop_requested = False
+            self.btn_pause.setText(self.tr("pause_fix"))
+
+    def toggle_fix_pause(self):
+        if not self._fix_running:
+            return
+        self._fix_paused = not self._fix_paused
+        self.btn_pause.setText(self.tr("resume_fix") if self._fix_paused else self.tr("pause_fix"))
+        if self._fix_paused:
+            self._set_status_text("fix_paused_status")
+
+    def stop_fix(self):
+        if not self._fix_running:
+            return
+        self._fix_stop_requested = True
+        self._fix_paused = False
+        self.btn_pause.setText(self.tr("pause_fix"))
+        self._set_status_text("fix_stopping_status")
+        QApplication.processEvents()
+
     def export_checked(self, action: str):
         selected = self._selected_items()
         if not selected:
@@ -1010,6 +1089,9 @@ class MainWindow(FramelessMainWindow):
         self._refresh_table()
 
     def fix_checked(self):
+        if self._fix_running:
+            return
+
         dst = self.output_edit.text().strip()
         if not dst:
             QMessageBox.warning(self, self.tr("hint"), self.tr("choose_output_first"))
@@ -1028,10 +1110,41 @@ class MainWindow(FramelessMainWindow):
             self._set_status_text("fixing", i=i, n=n, name=item.rel_path.name, status=self._display_status(st))
             QApplication.processEvents()
 
-        s, skip, f = fix_items(self.engine, selected, Path(dst), exist_action, progress_cb)
-        self.progress.setValue(100)
-        self._set_status_text("fix_done_status", success=s, failed=f, skipped=skip)
-        self._notify(self.tr("fix_done_title"), self.tr("fix_done_content", success=s, failed=f, skipped=skip))
+        def should_pause():
+            return self._fix_paused
+
+        def should_stop():
+            return self._fix_stop_requested
+
+        def idle_cb():
+            QApplication.processEvents()
+
+        self._fix_paused = False
+        self._fix_stop_requested = False
+        self._set_fix_running_state(True)
+
+        try:
+            s, skip, f = fix_items(
+                self.engine,
+                selected,
+                Path(dst),
+                exist_action,
+                progress_cb,
+                should_pause,
+                should_stop,
+                idle_cb,
+            )
+            stopped = self._fix_stop_requested
+        finally:
+            self._set_fix_running_state(False)
+
+        if stopped:
+            self._set_status_text("fix_stopped_status", success=s, failed=f, skipped=skip)
+            self._notify(self.tr("fix_stopped_title"), self.tr("fix_stopped_content", success=s, failed=f, skipped=skip), is_error=True)
+        else:
+            self.progress.setValue(100)
+            self._set_status_text("fix_done_status", success=s, failed=f, skipped=skip)
+            self._notify(self.tr("fix_done_title"), self.tr("fix_done_content", success=s, failed=f, skipped=skip))
         self._refresh_table()
 
 

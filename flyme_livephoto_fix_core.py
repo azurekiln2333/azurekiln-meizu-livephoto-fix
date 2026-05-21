@@ -3,6 +3,7 @@ import os
 import sys
 import subprocess
 from pathlib import Path
+import shutil
 
 
 def check_photo_type(file_path: Path) -> tuple[bool, bool, bool]:
@@ -15,7 +16,8 @@ def check_photo_type(file_path: Path) -> tuple[bool, bool, bool]:
             data = f.read(131072)  # 读取前 128KB
 
             is_meizu = b'MEIZU' in data.upper()
-            is_live = b'MZCamera:LivePhoto' in data and b'-000000001_-000000001' not in data
+            has_meizu_live_tag = b'MZCamera:LivePhoto' in data and b'-000000001_-000000001' not in data
+            is_live = is_meizu and has_meizu_live_tag
 
             # 如果是实况图，进一步检测是否已经写入了 Google 的兼容标签
             is_fixed = False
@@ -34,6 +36,13 @@ class LivePhotoFixTool:
         self.exiftool_path = self._get_exiftool_path()
         self._check_exiftool()
 
+    def _startupinfo(self):
+        if os.name != 'nt':
+            return None
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        return startupinfo
+
     def _get_exiftool_path(self) -> str:
         if hasattr(sys, '_MEIPASS'):
             bundle_path = os.path.join(sys._MEIPASS, 'exiftool.exe')
@@ -44,20 +53,35 @@ class LivePhotoFixTool:
             bundle_path2 = os.path.join(sys._MEIPASS, 'exiftool', 'exiftool.exe')
             if os.path.exists(bundle_path2):
                 return bundle_path2
-        # Prefer local bundled folder in development/runtime folder as well.
-        local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'exiftool', 'exiftool.exe')
-        if os.path.exists(local_path):
-            return local_path
+        # Prefer repository-bundled exiftool first to avoid unexpected system version differences.
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        candidates = (
+            os.path.join(base_dir, 'vendor', 'exiftool', 'exiftool.exe'),
+            os.path.join(base_dir, 'exiftool', 'exiftool.exe'),
+            os.path.join(base_dir, 'bin', 'exiftool.exe'),
+        )
+        for local_path in candidates:
+            if os.path.exists(local_path):
+                return local_path
         return 'exiftool'
+
+    def _run_exiftool(self, cmd: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            startupinfo=self._startupinfo(),
+        )
 
     def _check_exiftool(self):
         try:
-            startupinfo = None
-            if os.name == 'nt':
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-
-            subprocess.run([self.exiftool_path, '-ver'], capture_output=True, check=True, startupinfo=startupinfo)
+            subprocess.run(
+                [self.exiftool_path, '-ver'],
+                capture_output=True,
+                check=True,
+                startupinfo=self._startupinfo(),
+            )
         except Exception:
             raise FileNotFoundError("未找到 exiftool！请确保 exiftool.exe 在当前目录或已添加到系统环境变量。")
 
@@ -84,12 +108,7 @@ class LivePhotoFixTool:
 
             cmd.append(str(input_path))
 
-            startupinfo = None
-            if os.name == 'nt':
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-
-            result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', startupinfo=startupinfo)
+            result = self._run_exiftool(cmd)
 
             if result.returncode == 0:
                 if "failed condition" in result.stdout or "failed condition" in result.stderr:
@@ -102,6 +121,37 @@ class LivePhotoFixTool:
 
                 if not is_overwrite and "already exists" in error_msg:
                     return False, "目标文件已存在，ExifTool 拒绝覆盖"
-                return False, f"ExifTool 报错: {error_msg[:30]}..."
+                # exiftool on Windows may fail writing with -o in some shell/encoding/path cases.
+                # Fallback: copy to destination first, then write in-place on destination.
+                if (not is_overwrite) and ("Error Writing output" in error_msg):
+                    try:
+                        if output_path is None:
+                            return False, f"ExifTool 报错: {error_msg}"
+
+                        output_path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(input_path, output_path)
+
+                        fallback_cmd = [
+                            self.exiftool_path,
+                            '-P',
+                            '-overwrite_original',
+                            '-if',
+                            '$MIMEType eq "image/jpeg" and $XMP-MZCamera:LivePhoto and $XMP-MZCamera:LivePhoto ne "-000000001_-000000001"',
+                            '-XMP-GCamera:MotionPhoto=1',
+                            '-XMP-GCamera:MicroVideo=1',
+                            '-XMP-GCamera:MicroVideoVersion=1',
+                            '-XMP-GCamera:MicroVideoOffset<${XMP-MZCamera:LivePhoto;s/.*_//;s/^0+//}',
+                            '-XMP-GCamera:MotionPhotoPresentationTimestampUs=',
+                            str(output_path),
+                        ]
+                        fallback_result = self._run_exiftool(fallback_cmd)
+                        if fallback_result.returncode == 0:
+                            return True, "修复成功(写出回退路径)"
+                        fallback_err = fallback_result.stderr.strip() or fallback_result.stdout.strip()
+                        return False, f"ExifTool 报错: {fallback_err}"
+                    except Exception as fallback_e:
+                        return False, f"ExifTool 报错: {error_msg}; 回退失败: {fallback_e}"
+
+                return False, f"ExifTool 报错: {error_msg}"
         except Exception as e:
             return False, f"系统错误: {str(e)}"
