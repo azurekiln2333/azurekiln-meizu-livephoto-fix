@@ -1,4 +1,4 @@
-# Flyme LivePhoto Fix
+# Flyme LivePhoto Fix Tool
 
 [简体中文](../README.md) | [繁體中文](README.zh-TW.md) | English
 
@@ -19,7 +19,7 @@ Windows desktop tool built with `PyQt6 + qfluentwidgets + ExifTool` for batch-fi
 - Output settings support enabling or disabling each category
 - Support skipping or overwriting when the target already exists
 - Support right-click actions, copy file, cut file, and copy path
-- Support blue drag selection box, auto-scroll drag selection, and sorting
+- Support drag selection, edge auto-scroll, and sorting
 - Automatically save configuration to local `settings.json`
 
 ## Requirements
@@ -82,8 +82,8 @@ The packaged output is written to `dist/FlymeLivePhotoFix/` by default.
 
 - The right side of the list header provides `Select all / Invert / Clear list`
 - Checkboxes determine whether an item participates in output or export
-- Row highlight is only a visual selection state and is independent from the checkbox state
-- A blue rubber-band box is supported for drag selection, and the list auto-scrolls near the edges
+- Row highlight only indicates the UI selection state and does not reflect the checkbox state
+- Drag selection is supported; the list auto-scrolls when the pointer reaches the list edge
 - Right-clicking a file can quickly open it, locate it, copy its path, or open the system context menu
 
 ## Configuration File
