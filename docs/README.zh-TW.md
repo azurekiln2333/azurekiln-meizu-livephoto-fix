@@ -1,115 +1,94 @@
-# Flyme LivePhoto Fix Tool
+# Flyme LivePhoto Fix Tool（魅族實況照片修復工具）
 
 [简体中文](../README.md) | 繁體中文 | [English](README.en.md)
 
-基於 `PyQt6 + qfluentwidgets + ExifTool` 的 Windows 桌面工具，用於批次修復魅族 Flyme 實況照片的 Motion Photos 相容性，並依分類輸出檔案。
+一款基於 `PyQt6` 與 `ExifTool` 開發的 Windows 桌面工具。專為魅族 Flyme 使用者設計，用於**批次修復實況照片（Live Photo）的 Motion Photos 相容性問題**，同時提供智慧化的檔案分類與匯出功能。
 
-## 目前功能
+## 核心特性
 
-- 將檔案或資料夾拖曳到清單，非同步掃描並分類
-- 支援是否掃描子目錄
-- 自動識別並區分：
-  - Flyme 待處理動態照片
-  - 已處理好的動態照片
-  - Flyme 靜態照片
-  - 其他相機/手機照片
-  - 其他檔案
-- 勾選項目支援「修復並輸出」
-- 非待處理動態照片可直接複製副本到輸出目錄
-- 輸出設定支援依類別啟用或停用
-- 支援目標已存在時跳過或覆蓋
-- 支援右鍵選單、複製檔案、剪下檔案、複製路徑
-- 支援滑鼠拖曳框選、邊緣自動捲動與排序
-- 設定會自動儲存到本機 `settings.json`
+**智慧識別與修復**
+- **精準分類**：自動識別並區分 Flyme 待修復動態照片、已相容動態照片、靜態照片、其他手機照片及無關檔案。
+- **批次修復**：一鍵處理中繼資料，讓 Flyme 動態照片能在其他裝置或平台上正常顯示。
+- **彈性匯出**：非動態照片支援原樣複製匯出，並可依檔案類別隨時啟用或停用匯出。
+- **防衝突機制**：當目標目錄已有同名檔案時，可自由選擇「跳過」或「覆蓋」。
 
-## 執行環境
+**現代化互動體驗**
+- **拖曳操作**：支援直接將檔案或資料夾拖入清單，自動進行非同步掃描，並可選擇是否包含子目錄。
+- **流暢清單**：支援滑鼠拖曳框選、邊緣自動捲動、多欄位資料排序。
+- **便捷選單**：提供豐富的右鍵選單，支援呼叫系統預設右鍵選單、快速定位檔案、複製路徑等功能。
+- **設定記憶**：自動儲存輸出目錄、介面語言、分類開關等個人偏好設定。
 
-- Windows 10/11
-- Python 3.10+
-- `exiftool.exe`
+---
 
-## 安裝相依套件
+## 快速開始
+
+### 1. 執行環境
+- 作業系統：Windows 10 / 11
+- 執行相依：Python 3.10+
+- 核心元件：[ExifTool](https://exiftool.org/)
+
+> **關於 ExifTool 的說明**：
+> 程式會自動在以下位置尋找 `exiftool.exe`：
+> 1. `vendor/exiftool/exiftool.exe`（建議放在此處）
+> 2. `exiftool/exiftool.exe`
+> 3. `bin/exiftool.exe`
+> 4. 系統環境變數（Path）
+
+### 2. 由原始碼執行（開發者）
+
+複製倉庫後，安裝相依套件並啟動：
 
 ```powershell
+# 建立並啟用虛擬環境
 python -m venv .venv
 .\.venv\Scripts\activate
+
+# 安裝相依套件
 pip install PyQt6 PyQt6-Fluent-Widgets pywin32
+
+# 啟動程式
+python main_gui.py
 ```
 
-ExifTool 官網：<https://exiftool.org/>
+---
 
-`ExifTool` 需要能被程式找到。當前程式碼會優先查找這些位置：
+## 使用指南
 
-- `vendor/exiftool/exiftool.exe`
-- `exiftool/exiftool.exe`
-- `bin/exiftool.exe`
-- 系統環境變數中的 `exiftool`
+1. **匯入檔案**：啟動程式後，將需要處理的照片或資料夾直接拖入主介面中，並依需求勾選「掃描子目錄」。
+2. **確認輸出位置**：在「輸出設定」中確認或修改匯出路徑，預設為 `~/Pictures/FlymeLivePhotoFix_output`。
+3. **設定篩選規則**：勾選你想匯出的檔案類型，以及遇到同名檔案時的處理策略（跳過或覆蓋）。
+4. **一鍵修復／匯出**：
+   - 勾選清單中需要處理的項目，拖曳匯入的新項目預設會自動勾選。
+   - 點擊 **「修復並輸出」** 按鈕。
+   - *說明：Flyme 待處理照片會先修復再輸出，其他已勾選的一般照片則會直接複製到目標目錄。*
 
-## 啟動方式
+> **提示**：如果只是想整理檔案而不進行修復，也可以直接使用上方的「複製勾選項目」或「移動勾選項目」功能。
 
-```powershell
-.\.venv\Scripts\python.exe .\main_gui.py
-```
+---
 
-## 構建命令
+## 打包構建
 
-如需將 GUI 與倉庫內建的 `ExifTool` 一起打包，可執行：
+若需要將 GUI 與 `ExifTool` 打包成獨立的免安裝 `exe` 程式，請執行以下命令：
 
 ```powershell
 pip install pyinstaller
+
 pyinstaller --noconfirm --clean --windowed --name FlymeLivePhotoFix `
   --collect-all qfluentwidgets `
   --collect-all qframelesswindow `
   --add-data "vendor/exiftool;exiftool" `
   .\main_gui.py
 ```
+*構建產物將輸出至 `dist/FlymeLivePhotoFix/` 目錄。*
 
-構建完成後，產物預設輸出到 `dist/FlymeLivePhotoFix/`。
+---
 
-## 使用說明
+## 專案結構與設定
 
-1. 啟動程式後，確認輸出目錄。預設目錄為 `~/Pictures/FlymeLivePhotoFix_output`。
-2. 將需要處理的檔案或資料夾拖入清單。
-3. 依需求決定是否勾選「掃描子目錄」。
-4. 在「輸出設定」中選擇要輸出的檔案類型，以及「目標已存在時跳過/覆蓋」策略。
-5. 勾選要參與處理的項目。拖曳新增項目預設會自動勾選。
-6. 點擊「修復並輸出」：
-   - Flyme 待處理動態照片會呼叫 `ExifTool` 修復後輸出
-   - 其他已啟用類別會直接複製副本到輸出目錄
-7. 如需單純複製或移動目前勾選項目，也可以使用「複製勾選項目 / 移動勾選項目」。
+- **本機設定**：使用者設定會自動儲存到 `%APPDATA%\FlymeLivePhotoFix\settings.json`。
+- `main_gui.py`：主介面 UI 與基礎互動邏輯。
+- `main_gui_logic.py`：檔案掃描、分類、輸出、修復的核心業務流程。
+- `flyme_livephoto_fix_core.py`：基於 `ExifTool` 的底層識別與修復引擎。
 
-## 互動說明
-
-- 清單頂部右側提供：`全選 / 反選 / 清空清單`
-- 核取方塊決定項目是否參與輸出或匯出
-- 目前列高亮僅表示介面選取狀態，不代表核取方塊已勾選
-- 支援滑鼠拖曳框選；拖曳至清單邊緣時會自動捲動
-- 右鍵檔案可快速開啟、定位、複製路徑，也可呼叫系統右鍵選單
-
-## 設定檔
-
-程式會自動儲存以下設定：
-
-- 介面語言
-- 輸出目錄
-- 是否掃描子目錄
-- 輸出類型開關
-- 目標已存在時跳過或覆蓋
-
-Windows 下預設儲存到：
-
-```text
-%APPDATA%\FlymeLivePhotoFix\settings.json
-```
-
-## 核心檔案
-
-- `main_gui.py`：主介面與互動邏輯
-- `main_gui_logic.py`：分類、輸出與修復流程
-- `flyme_livephoto_fix_core.py`：基於 `ExifTool` 的識別與修復核心
-- `README.md`：簡體中文文件
-- `docs/README.en.md`：英文文件
-
-## 授權
-
+## 開源授權
 本專案依照倉庫中的 `LICENSE` 檔案發布。
