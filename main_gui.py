@@ -9,6 +9,7 @@ import ctypes
 from pathlib import Path
 from uuid import uuid4
 
+from ui_translations import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, TRANSLATIONS
 from main_gui_logic import (
     ITEM_KIND_FIXED_LIVE,
     ITEM_KIND_MEIZU_STATIC,
@@ -17,7 +18,7 @@ from main_gui_logic import (
     ITEM_KIND_PENDING_LIVE,
     PhotoItem,
     classify_item,
-    default_status_for_kind,
+    default_status_for_item,
     export_items,
     output_items,
 )
@@ -131,7 +132,9 @@ class DropScanWorker(QObject):
         return [dedup[k] for k in sorted(dedup, key=lambda x: x)]
 
     def _build_item(self, file_path: Path, source_root: Path | None) -> PhotoItem:
-        size_str, item_kind, is_meizu, is_live, is_fixed, needs_process = classify_item(file_path)
+        size_str, item_kind, is_meizu, is_live, is_fixed, is_native_compatible, needs_process = classify_item(
+            file_path
+        )
         if source_root is not None:
             try:
                 rel_path = file_path.relative_to(source_root)
@@ -150,8 +153,9 @@ class DropScanWorker(QObject):
             is_meizu=is_meizu,
             is_live=is_live,
             is_fixed=is_fixed,
+            is_native_compatible=is_native_compatible,
             needs_process=needs_process,
-            status=default_status_for_kind(item_kind),
+            status=default_status_for_item(item_kind, is_native_compatible),
         )
 
     def run(self):
@@ -260,190 +264,6 @@ setThemeColor = FW["set_theme_color"]
 IS_PRO = FW["is_pro"]
 
 
-TRANSLATIONS = {
-    "zh": {
-        "app_title": "Meizu LivePhoto Fix",
-        "missing_dependency_title": "依赖缺失",
-        "header_title": "魅族Flyme实况图LivePhoto兼容修复",
-        "header_subtitle": "修复兼容MotionPhotos支持，支持复制或移动导出",
-        "header_note": "基于 ExifTool",
-        "language": "界面语言",
-        "output_placeholder": "输出目录（默认图片目录）",
-        "choose_output": "选择输出目录",
-        "output_dir": "输出目录",
-        "output_settings": "输出设置",
-        "scan_subdirs": "扫描子目录",
-        "include_fixed_live": "处理好的动态照片",
-        "include_static": "Flyme静态照片",
-        "include_other_photo": "其他相机/手机照片",
-        "include_other_file": "其他文件",
-        "output_note": "勾选后会输出；待处理动态照片会自动修复后输出",
-        "skip_existing": "目标已存在时跳过",
-        "overwrite_existing": "目标已存在时覆盖",
-        "fix_checked": "修复并输出",
-        "pause_fix": "暂停",
-        "resume_fix": "继续",
-        "stop_fix": "停止",
-        "copy_checked": "复制勾选项",
-        "move_checked": "移动勾选项",
-        "select_all": "全选",
-        "invert_selection": "反选",
-        "clear_list": "清空列表",
-        "drop_hint": "将需要处理的文件拖入列表",
-        "table_checked": "勾选",
-        "table_rel_path": "相对路径",
-        "table_size": "大小",
-        "table_meizu": "魅族",
-        "table_live": "实况",
-        "table_status": "状态",
-        "waiting_choose_dir": "等待选择目录",
-        "waiting_drop": "等待拖拽文件到列表",
-        "dialog_choose_output": "选择输出目录",
-        "open": "打开",
-        "open_folder": "打开所在目录",
-        "copy_files": "复制文件",
-        "cut_files": "剪切文件",
-        "copy_path": "复制路径",
-        "system_context_menu": "系统右键菜单...",
-        "yes": "是",
-        "no": "否",
-        "busy_title": "正在处理",
-        "busy_content": "上一批拖拽仍在处理中，请稍候",
-        "parsing_drop": "正在解析拖拽文件...",
-        "adding_files": "正在添加文件 {done}/{total}",
-        "no_new_jpg": "未发现可新增文件",
-        "no_new_title": "未新增",
-        "no_new_content": "拖入文件已全部存在于列表中或已被过滤",
-        "drop_done_status": "拖拽完成：新增 {added}/{total}，当前共 {count} 项",
-        "drop_done_title": "拖拽添加完成",
-        "added_count": "新增 {added}/{total}",
-        "list_cleared": "列表已清空",
-        "list_cleared_content": "列表已清空，等待拖拽文件",
-        "hint": "提示",
-        "select_export_first": "请先勾选要导出的文件",
-        "no_output_items": "勾选项中没有要输出的文件",
-        "dialog_choose_export": "选择导出目录",
-        "copying": "复制中 {i}/{n}: {name}",
-        "moving": "移动中 {i}/{n}: {name}",
-        "export_done_status": "导出完成: 成功 {success} / 失败 {failed}",
-        "export_done_title": "导出完成",
-        "success_failed": "成功 {success} / 失败 {failed}",
-        "choose_output_first": "请先选择输出目录",
-        "no_fix_items": "勾选项中没有待输出文件",
-        "fixing": "输出中 {i}/{n}: {name} - {status}",
-        "fix_done_status": "输出完成: 成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
-        "fix_stopped_status": "已停止: 成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
-        "fix_paused_status": "已暂停，可继续或停止",
-        "fix_stopping_status": "正在停止...",
-        "fix_done_title": "输出完成",
-        "fix_done_content": "成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
-        "fix_stopped_title": "输出已停止",
-        "fix_stopped_content": "已停止本轮任务，成功 {success} / 失败 {failed} / 冲突跳过 {skipped}",
-        "status_pending": "等待处理",
-        "status_fixed_compatible": "已修复兼容",
-        "status_not_meizu": "非魅族设备照片",
-        "status_static": "魅族普通静态图",
-        "status_other_file": "其他文件",
-        "status_skip_exists": "跳过(目标已存在)",
-        "status_fixing": "正在处理",
-        "status_copying": "正在复制",
-        "status_fix_success": "修复成功",
-        "status_output_copy_success": "已输出副本",
-        "status_failed_prefix": "失败:",
-    },
-    "en": {
-        "app_title": "Meizu LivePhoto Fix",
-        "missing_dependency_title": "Missing dependency",
-        "header_title": "Meizu Flyme LivePhoto Compatibility Fix",
-        "header_subtitle": "Fix Motion Photos compatibility, then copy or move selected photos",
-        "header_note": "Powered by ExifTool",
-        "language": "Language",
-        "output_placeholder": "Output folder (Pictures by default)",
-        "choose_output": "Choose output folder",
-        "output_dir": "Output folder",
-        "output_settings": "Output settings",
-        "scan_subdirs": "Scan subfolders",
-        "include_fixed_live": "Processed live photos",
-        "include_static": "Flyme static photos",
-        "include_other_photo": "Other camera/phone photos",
-        "include_other_file": "Other files",
-        "output_note": "Checked types will be exported. Pending live photos are fixed automatically.",
-        "skip_existing": "Skip when target exists",
-        "overwrite_existing": "Overwrite when target exists",
-        "fix_checked": "Fix and output",
-        "pause_fix": "Pause",
-        "resume_fix": "Resume",
-        "stop_fix": "Stop",
-        "copy_checked": "Copy selected",
-        "move_checked": "Move selected",
-        "select_all": "Select all",
-        "invert_selection": "Invert selection",
-        "clear_list": "Clear list",
-        "drop_hint": "Drag files to process into the list",
-        "table_checked": "Selected",
-        "table_rel_path": "Relative path",
-        "table_size": "Size",
-        "table_meizu": "Meizu",
-        "table_live": "Live",
-        "table_status": "Status",
-        "waiting_choose_dir": "Waiting for output folder",
-        "waiting_drop": "Drop files into the list",
-        "dialog_choose_output": "Choose output folder",
-        "open": "Open",
-        "open_folder": "Show in folder",
-        "copy_files": "Copy files",
-        "cut_files": "Cut files",
-        "copy_path": "Copy path",
-        "system_context_menu": "System context menu...",
-        "yes": "Yes",
-        "no": "No",
-        "busy_title": "Processing",
-        "busy_content": "The previous drop batch is still being processed. Please wait.",
-        "parsing_drop": "Analyzing dropped files...",
-        "adding_files": "Adding files {done}/{total}",
-        "no_new_jpg": "No new files found",
-        "no_new_title": "No files added",
-        "no_new_content": "All dropped files already exist in the list or were filtered out.",
-        "drop_done_status": "Drop complete: added {added}/{total}, {count} items total",
-        "drop_done_title": "Drop complete",
-        "added_count": "Added {added}/{total}",
-        "list_cleared": "List cleared",
-        "list_cleared_content": "The list is empty. Drop files to continue.",
-        "hint": "Notice",
-        "select_export_first": "Select files to export first.",
-        "no_output_items": "No checked files to output.",
-        "dialog_choose_export": "Choose export folder",
-        "copying": "Copying {i}/{n}: {name}",
-        "moving": "Moving {i}/{n}: {name}",
-        "export_done_status": "Export complete: {success} succeeded / {failed} failed",
-        "export_done_title": "Export complete",
-        "success_failed": "{success} succeeded / {failed} failed",
-        "choose_output_first": "Choose an output folder first.",
-        "no_fix_items": "No selected files to output.",
-        "fixing": "Outputting {i}/{n}: {name} - {status}",
-        "fix_done_status": "Output complete: {success} succeeded / {failed} failed / {skipped} skipped",
-        "fix_stopped_status": "Stopped: {success} succeeded / {failed} failed / {skipped} skipped",
-        "fix_paused_status": "Paused. Resume or stop the run.",
-        "fix_stopping_status": "Stopping...",
-        "fix_done_title": "Output complete",
-        "fix_done_content": "{success} succeeded / {failed} failed / {skipped} skipped",
-        "fix_stopped_title": "Output stopped",
-        "fix_stopped_content": "This run was stopped. {success} succeeded / {failed} failed / {skipped} skipped",
-        "status_pending": "Pending",
-        "status_fixed_compatible": "Already compatible",
-        "status_not_meizu": "Not a Meizu photo",
-        "status_static": "Meizu static photo",
-        "status_other_file": "Other file",
-        "status_skip_exists": "Skipped (target exists)",
-        "status_fixing": "Working",
-        "status_copying": "Copying",
-        "status_fix_success": "Fixed",
-        "status_output_copy_success": "Copied to output",
-        "status_failed_prefix": "Failed:",
-    },
-}
-
-
 def _pick_icon(*names: str):
     for name in names:
         icon = getattr(FluentIcon, name, None)
@@ -455,7 +275,7 @@ def _pick_icon(*names: str):
 class MainWindow(FramelessMainWindow):
     def __init__(self):
         super().__init__()
-        self.lang = "zh"
+        self.lang = DEFAULT_LANGUAGE
         self._last_status_key = "waiting_choose_dir"
         self._last_status_kwargs = {}
         self.setWindowTitle(self.tr("app_title"))
@@ -806,7 +626,7 @@ class MainWindow(FramelessMainWindow):
         self._suspend_settings_save = True
         try:
             lang = data.get("language")
-            if lang in TRANSLATIONS:
+            if lang in SUPPORTED_LANGUAGES:
                 self.lang = lang
                 for idx in range(self.language_combo.count()):
                     if self.language_combo.itemData(idx) == lang:
@@ -842,7 +662,7 @@ class MainWindow(FramelessMainWindow):
 
     def _on_language_changed(self, _index: int):
         lang = self.language_combo.currentData()
-        if lang not in TRANSLATIONS or lang == self.lang:
+        if lang not in SUPPORTED_LANGUAGES or lang == self.lang:
             return
         self.lang = lang
         self._apply_language()

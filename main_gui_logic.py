@@ -25,6 +25,7 @@ class PhotoItem:
     is_meizu: bool
     is_live: bool
     is_fixed: bool
+    is_native_compatible: bool
     needs_process: bool
     status: str
 
@@ -35,7 +36,7 @@ def format_size(size: int) -> str:
     return f"{size / (1024 * 1024):.1f} MB"
 
 
-def classify_item(file_path: Path) -> tuple[str, str, bool, bool, bool, bool]:
+def classify_item(file_path: Path) -> tuple[str, str, bool, bool, bool, bool, bool]:
     try:
         size_str = format_size(file_path.stat().st_size)
     except Exception:
@@ -43,12 +44,12 @@ def classify_item(file_path: Path) -> tuple[str, str, bool, bool, bool, bool]:
 
     suffix = file_path.suffix.lower()
     if suffix not in {".jpg", ".jpeg"}:
-        return size_str, ITEM_KIND_OTHER_FILE, False, False, False, False
+        return size_str, ITEM_KIND_OTHER_FILE, False, False, False, False, False
 
     try:
-        is_meizu, is_live, is_fixed = check_photo_type(file_path)
+        is_meizu, is_live, is_fixed, is_native_compatible = check_photo_type(file_path)
     except Exception:
-        is_meizu, is_live, is_fixed = False, False, False
+        is_meizu, is_live, is_fixed, is_native_compatible = False, False, False, False
 
     needs_process = is_live and not is_fixed
     if needs_process:
@@ -59,13 +60,15 @@ def classify_item(file_path: Path) -> tuple[str, str, bool, bool, bool, bool]:
         item_kind = ITEM_KIND_MEIZU_STATIC
     else:
         item_kind = ITEM_KIND_OTHER_PHOTO
-    return size_str, item_kind, is_meizu, is_live, is_fixed, needs_process
+    return size_str, item_kind, is_meizu, is_live, is_fixed, is_native_compatible, needs_process
 
 
-def default_status_for_kind(item_kind: str) -> str:
+def default_status_for_item(item_kind: str, is_native_compatible: bool) -> str:
     if item_kind == ITEM_KIND_PENDING_LIVE:
         return "status_pending"
     if item_kind == ITEM_KIND_FIXED_LIVE:
+        if is_native_compatible:
+            return "status_native_compatible"
         return "status_fixed_compatible"
     if item_kind == ITEM_KIND_MEIZU_STATIC:
         return "status_static"
@@ -93,7 +96,9 @@ def scan_photo_items(input_dir: Path, include_subdirs: bool = True) -> list[Phot
     items: list[PhotoItem] = []
 
     for idx, jpg_path in enumerate(sorted(jpg_files, key=lambda p: str(p))):
-        size_str, item_kind, is_meizu, is_live, is_fixed, needs_process = classify_item(jpg_path)
+        size_str, item_kind, is_meizu, is_live, is_fixed, is_native_compatible, needs_process = classify_item(
+            jpg_path
+        )
 
         try:
             rel_path = jpg_path.relative_to(input_dir)
@@ -111,8 +116,9 @@ def scan_photo_items(input_dir: Path, include_subdirs: bool = True) -> list[Phot
                 is_meizu=is_meizu,
                 is_live=is_live,
                 is_fixed=is_fixed,
+                is_native_compatible=is_native_compatible,
                 needs_process=needs_process,
-                status=default_status_for_kind(item_kind),
+                status=default_status_for_item(item_kind, is_native_compatible),
             )
         )
 
@@ -207,6 +213,7 @@ def output_items(
                 success_count += 1
                 item.needs_process = False
                 item.is_fixed = True
+                item.is_native_compatible = False
                 item.item_kind = ITEM_KIND_FIXED_LIVE
                 item.status = "status_fix_success"
             else:
@@ -299,6 +306,7 @@ def fix_items(
             success_count += 1
             item.needs_process = False
             item.is_fixed = True
+            item.is_native_compatible = False
             item.status = "status_fix_success"
         else:
             fail_count += 1

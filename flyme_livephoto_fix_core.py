@@ -32,10 +32,18 @@ def _has_google_container_motion_photo_tags(data: bytes) -> bool:
     )
 
 
-def check_photo_type(file_path: Path) -> tuple[bool, bool, bool]:
+def _detect_motion_photo_compatibility(data: bytes) -> str:
+    if _has_google_container_motion_photo_tags(data):
+        return "native_container"
+    if _has_google_legacy_motion_photo_tags(data):
+        return "legacy_fixed"
+    return "none"
+
+
+def check_photo_type(file_path: Path) -> tuple[bool, bool, bool, bool]:
     """
     极速预检：通过读取前 128KB 快速查找特征码。
-    返回: (is_meizu, is_live, is_fixed)
+    返回: (is_meizu, is_live, is_fixed, is_native_compatible)
     """
     try:
         with open(file_path, 'rb') as f:
@@ -47,14 +55,15 @@ def check_photo_type(file_path: Path) -> tuple[bool, bool, bool]:
 
             # 如果是实况图，进一步检测是否已经写入了 Google 的兼容标签
             is_fixed = False
+            is_native_compatible = False
             if is_live:
-                is_fixed = _has_google_legacy_motion_photo_tags(data) or _has_google_container_motion_photo_tags(
-                    data
-                )
+                compatibility = _detect_motion_photo_compatibility(data)
+                is_fixed = compatibility != "none"
+                is_native_compatible = compatibility == "native_container"
 
-            return is_meizu, is_live, is_fixed
+            return is_meizu, is_live, is_fixed, is_native_compatible
     except Exception:
-        return False, False, False
+        return False, False, False, False
 
 
 class LivePhotoFixTool:
