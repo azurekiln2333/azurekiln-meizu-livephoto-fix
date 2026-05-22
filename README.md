@@ -1,6 +1,6 @@
 # Flyme LivePhoto Fix Tool (魅族实况照片修复工具)
 
-[简体中文](./README.md) | [繁體中文](docs/README.zh-TW.md) | [English](docs/README.en.md)
+简体中文 | [繁體中文](docs/README.zh-TW.md) | [English](docs/README.en.md)
 
 一款基于 `PyQt6` 和 `ExifTool` 开发的 Windows 桌面工具。专为魅族 Flyme 用户设计，用于**批量修复实况照片（Live Photo）的 Motion Photos 兼容性问题**，同时提供智能的文件分类与导出功能。
 
