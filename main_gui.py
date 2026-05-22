@@ -25,7 +25,7 @@ from flyme_livephoto_fix_core import LivePhotoFixTool
 from qframelesswindow import FramelessMainWindow, StandardTitleBar
 
 from PyQt6.QtCore import QEvent, QObject, QThread, Qt, pyqtSignal, QRect, QItemSelectionModel, QPoint, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QCursor, QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -1204,6 +1204,7 @@ class MainWindow(FramelessMainWindow):
             return False
 
         try:
+            owner_hwnd = int(self.window().winId())
             folder = shell.SHGetDesktopFolder()
             abs_paths = [str(p.resolve()) for p in file_paths]
             parent_dirs = {str(Path(p).parent) for p in abs_paths}
@@ -1221,7 +1222,7 @@ class MainWindow(FramelessMainWindow):
                 child_pidls.append(child_pidl)
 
             _inout, cm = parent_folder.GetUIObjectOf(
-                int(self.table.winId()),
+                owner_hwnd,
                 child_pidls,
                 shell.IID_IContextMenu,
                 0,
@@ -1234,27 +1235,31 @@ class MainWindow(FramelessMainWindow):
                 flags = shellcon.CMF_NORMAL
                 cm.QueryContextMenu(hmenu, 0, id_cmd_first, 0x7FFF, flags)
 
-                win32gui.SetForegroundWindow(int(self.table.winId()))
+                win32gui.SetForegroundWindow(owner_hwnd)
                 cmd = win32gui.TrackPopupMenu(
                     hmenu,
                     win32con.TPM_LEFTALIGN | win32con.TPM_RETURNCMD | win32con.TPM_RIGHTBUTTON,
                     global_pos.x(),
                     global_pos.y(),
                     0,
-                    int(self.table.winId()),
+                    owner_hwnd,
                     None,
                 )
             finally:
                 win32gui.DestroyMenu(hmenu)
 
             if cmd:
-                ci = (0, int(self.table.winId()), cmd - id_cmd_first, None, parent_dir, 0, 0, 0)
+                ci = (0, owner_hwnd, cmd - id_cmd_first, None, parent_dir, 0, 0, 0)
                 cm.InvokeCommand(ci)
             else:
-                win32gui.PostMessage(int(self.table.winId()), win32con.WM_NULL, 0, 0)
+                win32gui.PostMessage(owner_hwnd, win32con.WM_NULL, 0, 0)
             return True
         except Exception:
             return False
+
+    def _show_explorer_context_menu_deferred(self, file_paths: list[Path]) -> None:
+        paths = list(file_paths)
+        QTimer.singleShot(0, lambda: self._show_explorer_context_menu(paths, QCursor.pos()))
 
     def _set_file_clipboard(self, paths: list[Path], cut: bool = False) -> bool:
         if not paths:
@@ -1380,7 +1385,7 @@ class MainWindow(FramelessMainWindow):
         if sys.platform == "win32":
             act_shell = menu.addAction(self.tr("system_context_menu"))
             act_shell.setEnabled(same_parent)
-            act_shell.triggered.connect(lambda: self._show_explorer_context_menu(file_paths, global_pos))
+            act_shell.triggered.connect(lambda: self._show_explorer_context_menu_deferred(file_paths))
             menu.addSeparator()
 
         verbs = self._get_shell_verbs(file_paths[0]) if sys.platform == "win32" and len(file_paths) == 1 else []
