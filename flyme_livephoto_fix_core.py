@@ -6,6 +6,32 @@ from pathlib import Path
 import shutil
 
 
+def _contains_any(data: bytes, patterns: tuple[bytes, ...]) -> bool:
+    return any(pattern in data for pattern in patterns)
+
+
+def _has_google_legacy_motion_photo_tags(data: bytes) -> bool:
+    return _contains_any(data, (b'GCamera:MotionPhoto', b'Camera:MotionPhoto')) and _contains_any(
+        data, (b'GCamera:MicroVideoOffset', b'Camera:MicroVideoOffset')
+    )
+
+
+def _has_google_container_motion_photo_tags(data: bytes) -> bool:
+    return (
+        _contains_any(data, (b'GCamera:MotionPhoto', b'Camera:MotionPhoto'))
+        and _contains_any(
+            data,
+            (
+                b'GCamera:MotionPhotoPresentationTimestampUs',
+                b'Camera:MotionPhotoPresentationTimestampUs',
+            ),
+        )
+        and _contains_any(data, (b'GContainer:Directory', b'Container:Directory'))
+        and b'Item:Semantic="MotionPhoto"' in data
+        and b'Item:Mime="video/mp4"' in data
+    )
+
+
 def check_photo_type(file_path: Path) -> tuple[bool, bool, bool]:
     """
     极速预检：通过读取前 128KB 快速查找特征码。
@@ -22,7 +48,9 @@ def check_photo_type(file_path: Path) -> tuple[bool, bool, bool]:
             # 如果是实况图，进一步检测是否已经写入了 Google 的兼容标签
             is_fixed = False
             if is_live:
-                is_fixed = b'GCamera:MotionPhoto' in data and b'GCamera:MicroVideoOffset' in data
+                is_fixed = _has_google_legacy_motion_photo_tags(data) or _has_google_container_motion_photo_tags(
+                    data
+                )
 
             return is_meizu, is_live, is_fixed
     except Exception:
