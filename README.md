@@ -1,114 +1,94 @@
-# Flyme LivePhoto Fix Tool
+# Flyme LivePhoto Fix Tool (魅族实况照片修复工具)
 
-简体中文 | [繁體中文](docs/README.zh-TW.md) | [English](docs/README.en.md)
+[简体中文](./README.md) | [繁體中文](docs/README.zh-TW.md) | [English](docs/README.en.md)
 
-基于 `PyQt6 + qfluentwidgets + ExifTool` 的 Windows 桌面工具，用于批量修复魅族 Flyme 实况照片的 Motion Photos 兼容性，并按分类输出文件。
+一款基于 `PyQt6` 和 `ExifTool` 开发的 Windows 桌面工具。专为魅族 Flyme 用户设计，用于**批量修复实况照片（Live Photo）的 Motion Photos 兼容性问题**，同时提供智能的文件分类与导出功能。
 
-## 当前功能
+##  核心特性
 
-- 拖拽文件或文件夹到列表，异步扫描并分类
-- 支持是否扫描子目录
-- 自动识别并区分：
-  - Flyme 待处理动态照片
-  - 已处理好的动态照片
-  - Flyme 静态照片
-  - 其他相机/手机照片
-  - 其他文件
-- 勾选项支持“修复并输出”
-- 非待处理动态照片可直接复制副本到输出目录
-- 输出设置支持按类别启用/禁用
-- 支持目标已存在时跳过或覆盖
-- 支持右键菜单、复制文件、剪切文件、复制路径
-- 支持鼠标拖拽框选、边缘自动滚动与排序
-- 配置自动保存到本地 `settings.json`
+** 智能识别与修复**
+- **精准分类**：自动识别并区分 Flyme 待修复动态照片、已兼容动态照片、静态照片、其他手机照片及无关文件。
+- **批量修复**：一键处理元数据，让 Flyme 动态照片在其他设备或平台上正常显示。
+- **灵活导出**：非动态照片支持原样复制导出，支持按文件类别随时开启/关闭导出。
+- **防冲突机制**：目标目录存在同名文件时，可自由选择“跳过”或“覆盖”。
 
-## 运行环境
+** 现代化交互体验**
+- **拖拽操作**：支持直接将文件或文件夹拖入列表，自动异步扫描（支持包含子目录）。
+- **流畅列表**：支持鼠标拖拽框选、边缘自动滚动、多列数据排序。
+- **便捷菜单**：提供丰富的右键菜单，支持调用系统默认右键菜单、快速定位文件、复制路径等。
+- **配置记忆**：自动保存输出目录、界面语言、分类开关等个人偏好设置。
 
-- Windows 10/11
-- Python 3.10+
-- `exiftool.exe`
+---
 
-## 安装依赖
+## 快速开始
+
+### 1. 运行环境
+- 操作系统：Windows 10 / 11
+- 运行依赖：Python 3.10+
+- 核心组件：[ExifTool](https://exiftool.org/)
+
+> **关于 ExifTool 的说明**：
+> 程序会自动在以下位置寻找 `exiftool.exe`：
+> 1. `vendor/exiftool/exiftool.exe`（推荐放在此处）
+> 2. `exiftool/exiftool.exe`
+> 3. `bin/exiftool.exe`
+> 4. 系统环境变量（Path）
+
+### 2. 源码运行 (开发者)
+
+克隆仓库后，安装依赖并启动：
 
 ```powershell
+# 创建并激活虚拟环境
 python -m venv .venv
 .\.venv\Scripts\activate
+
+# 安装依赖
 pip install PyQt6 PyQt6-Fluent-Widgets pywin32
+
+# 启动程序
+python main_gui.py
 ```
 
-ExifTool 官网：<https://exiftool.org/>
+---
 
-`ExifTool` 需要能被程序找到。当前代码会优先查找这些位置：
+## 使用指南
 
-- `vendor/exiftool/exiftool.exe`
-- `exiftool/exiftool.exe`
-- `bin/exiftool.exe`
-- 系统环境变量中的 `exiftool`
+1. **导入文件**：启动程序后，将需要处理的照片或文件夹直接拖入软件主界面（按需勾选“扫描子目录”）。
+2. **确认输出位置**：在“输出设置”中确认或修改导出路径（默认为 `~/Pictures/FlymeLivePhotoFix_output`）。
+3. **设置过滤规则**：勾选你想要导出的文件类型，以及遇到同名文件时的处理策略（跳过/覆盖）。
+4. **一键修复/导出**：
+   - 勾选列表中需要处理的条目（拖拽导入的新项目默认已勾选）。
+   - 点击 **“修复并输出”** 按钮。
+   - *说明：Flyme 待处理照片会被修复后输出，其他被勾选的常规照片将直接复制到目标目录。*
 
-## 启动方式
+> ** 提示**：如果只需整理文件而不做修复，可以直接使用顶部的“复制勾选项”或“移动勾选项”功能。
 
-```powershell
-.\.venv\Scripts\python.exe .\main_gui.py
-```
+---
 
-## 构建命令
+##  打包构建
 
-如需将 GUI 和仓库内置的 `ExifTool` 一起打包，可执行：
+如果需要将 GUI 和 `ExifTool` 打包成一个独立的免安装 `exe` 程序，请执行以下命令：
 
 ```powershell
 pip install pyinstaller
+
 pyinstaller --noconfirm --clean --windowed --name FlymeLivePhotoFix `
   --collect-all qfluentwidgets `
   --collect-all qframelesswindow `
   --add-data "vendor/exiftool;exiftool" `
   .\main_gui.py
 ```
+*构建产物将输出至 `dist/FlymeLivePhotoFix/` 目录。*
 
-构建完成后，产物默认输出到 `dist/FlymeLivePhotoFix/`。
+---
 
-## 使用说明
+## 项目结构与配置
 
-1. 启动程序后，确认输出目录。默认目录为 `~/Pictures/FlymeLivePhotoFix_output`。
-2. 将需要处理的文件或文件夹拖入列表。
-3. 根据需要决定是否勾选“扫描子目录”。
-4. 在“输出设置”里选择要输出的文件类型，以及“目标已存在时跳过/覆盖”策略。
-5. 勾选要参与处理的条目。拖拽新增项目默认会自动勾选。
-6. 点击“修复并输出”：
-   - Flyme 待处理动态照片会调用 `ExifTool` 修复后输出
-   - 其他已启用类别会直接复制副本到输出目录
-7. 如需单纯复制/移动当前勾选项，也可以使用“复制勾选项 / 移动勾选项”。
+- **本地配置**：用户设置会自动保存在 `%APPDATA%\FlymeLivePhotoFix\settings.json`。
+- `main_gui.py`：主界面 UI 与基础交互逻辑。
+- `main_gui_logic.py`：文件扫描、分类、输出、修复的核心业务流程。
+- `flyme_livephoto_fix_core.py`：基于 `ExifTool` 的底层识别与修复引擎。
 
-## 交互说明
-
-- 列表顶部右侧提供：`全选 / 反选 / 清空列表`
-- 复选框决定条目是否参与输出或导出
-- 当前行高亮仅表示界面选中状态，不代表复选框已勾选
-- 支持鼠标拖拽框选；拖拽至列表边缘时会自动滚动
-- 右键文件可快速打开、定位、复制路径，也可调用系统右键菜单
-
-## 配置文件
-
-程序会自动保存以下设置：
-
-- 界面语言
-- 输出目录
-- 是否扫描子目录
-- 输出类型开关
-- 目标已存在时跳过/覆盖
-
-Windows 下默认保存到：
-
-```text
-%APPDATA%\FlymeLivePhotoFix\settings.json
-```
-
-## 核心文件
-
-- `main_gui.py`：主界面与交互逻辑
-- `main_gui_logic.py`：分类、输出、修复流程
-- `flyme_livephoto_fix_core.py`：基于 `ExifTool` 的识别与修复核心
-- `docs/README.en.md`：英文文档
-
-## 许可
-
+## 开源协议
 本项目基于仓库中的 `LICENSE` 文件发布。
