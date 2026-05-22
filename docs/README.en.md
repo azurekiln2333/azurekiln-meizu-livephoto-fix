@@ -1,8 +1,13 @@
-# Flyme LivePhoto Fix Tool
+# Flyme LivePhoto Fix Tool (Meizu Live Photo Repair Tool)
 
 [简体中文](../README.md) | [繁體中文](README.zh-TW.md) | English
 
-A Windows desktop tool built with `PyQt6` and `ExifTool`. It is designed for Meizu Flyme users to **batch-fix Motion Photos compatibility issues in Live Photos**, while also providing intelligent file classification and export features.
+It started when I was organizing photos recently and found that Live Photos taken with the system camera on the Meizu 21/21 Note running versions earlier than Flyme 12.6 could not be correctly recognized as motion photos in Microsoft Photos and Google Photos.
+
+In theory, this issue only exists on versions earlier than Flyme 12.6. Meizu has already fixed this compatibility issue in the system camera of the latest version, `Flyme 12.6.0.0A (2026/01/29)`.
+This project was created to fix those legacy LivePhoto file compatibility issues. Based on ExifTool, it patches photo EXIF metadata and supports batch repair of Live Photos taken with the system camera on versions earlier than Flyme 12.6, so they can be correctly recognized as motion photos by platforms such as `Microsoft Photos` and `Google Photos`.
+
+At the same time, the project provides a Windows 11-style GUI built with `PyQt6`, along with intelligent file classification and export features, to improve the batch processing experience.
 
 ## Core Features
 

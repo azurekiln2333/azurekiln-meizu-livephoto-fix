@@ -2,7 +2,12 @@
 
 [简体中文](../README.md) | 繁體中文 | [English](README.en.md)
 
-一款基於 `PyQt6` 與 `ExifTool` 開發的 Windows 桌面工具。專為魅族 Flyme 使用者設計，用於**批次修復實況照片（Live Photo）的 Motion Photos 相容性問題**，同時提供智慧化的檔案分類與匯出功能。
+事情的起因是近期在整理照片時，我發現此前使用魅族 21/21 Note（Flyme 12.6 以下版本）系統相機拍攝的 LivePhoto，在 Microsoft Photos 與 Google Photos 中無法被正確識別為動態照片。
+
+理論上，這個問題僅存在於 Flyme 12.6 以下版本。目前，魅族已在最新版本 `Flyme 12.6.0.0A (2026/01/29)` 的系統相機中修復了這個相容性問題。
+因此，這個專案就是為了修復這些歷史遺留的 LivePhoto 檔案相容性問題而誕生的。專案基於 ExifTool 對照片的 Exif 中繼資料進行修補，支援批次修復 Flyme 12.6 以下版本系統相機拍攝的 LivePhoto，讓它們能被 `Microsoft Photos`、`Google Photos` 等平台正確識別為動態照片。
+
+同時，專案基於 `PyQt6` 設計了 Windows 11 風格的 GUI，並提供智慧檔案分類與匯出功能，以提升批次處理體驗。
 
 ## 核心特性
 
